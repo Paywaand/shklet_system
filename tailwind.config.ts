@@ -24,10 +24,10 @@ const config: Config = {
           600: "#CC1D29",
         },
         leaf: {
-          DEFAULT: "#AA8066", // Pantone 479 C (brown) — replaces old green
+          DEFAULT: "#EF3340", // Pantone 479 C (brown) — replaces old green
           50: "#F3EDE9",
           100: "#E5D8CF",
-          500: "#AA8066",
+          500: "#EF3340",
           600: "#8C6852",
         },
         cream: {

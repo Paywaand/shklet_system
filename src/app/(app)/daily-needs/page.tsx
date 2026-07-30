@@ -415,7 +415,7 @@ export default function DailyNeedsPage() {
             />
             <div>
               <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: 0.5 }}>CORN&apos;ER</div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "#AA8066" }}>{t("dailyNeeds.header.title")}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#EF3340" }}>{t("dailyNeeds.header.title")}</div>
             </div>
           </div>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>{dateLabel}</div>
@@ -431,7 +431,7 @@ export default function DailyNeedsPage() {
                   style={{
                     fontSize: 16,
                     fontWeight: 900,
-                    color: "#AA8066",
+                    color: "#EF3340",
                     marginBottom: 6,
                     borderBottom: "2px solid rgba(89,51,28,0.15)",
                     paddingBottom: 3,

@@ -40,7 +40,7 @@ export type MonthlyReport = {
 
 // Brand palette (Shklet)
 const CORN = "#EC2231"; // brand red
-const LEAF = "#AA8066"; // accent brown (matches tailwind leaf token)
+const LEAF = "#EF3340"; // accent brown (matches tailwind leaf token)
 const CREAM = "#F2E8DC"; // brand cream
 const COCOA = "#1A1A1A"; // ink
 

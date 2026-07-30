@@ -73,7 +73,7 @@ function rangeToDates(key: RangeKey, customFrom: string, customTo: string, hours
   };
 }
 
-const CHART_COLORS = ["#FEDB00", "#AA8066", "#232222", "#EF3340", "#CBA3D8"];
+const CHART_COLORS = ["#FEDB00", "#EF3340", "#232222", "#EF3340", "#CBA3D8"];
 
 export default function AnalyticsPage() {
   const { user, businessHours } = useSession();
@@ -267,7 +267,7 @@ export default function AnalyticsPage() {
                 <XAxis dataKey="date" tickFormatter={(d) => d.slice(5)} fontSize={11} />
                 <YAxis tickFormatter={(v) => num(v)} fontSize={11} width={60} />
                 <Tooltip formatter={(v: number) => iqd(v)} />
-                <Bar dataKey="revenue" fill="#AA8066" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="revenue" fill="#EF3340" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           )}
