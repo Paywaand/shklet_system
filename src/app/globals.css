@@ -1,0 +1,204 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────────────
+   Shklet design system
+   Brand hex values are exact — do not approximate or invent new ones.
+   Everything else (elevation, radius, motion, surfaces) is designed on
+   top of them for a premium, high-density internal tool — not a
+   generic admin template.
+   ───────────────────────────────────────────────────────────────────── */
+@theme {
+  --color-shklet-red: #ef3340;
+  --color-shklet-red-dim: #c92834;
+  --color-shklet-cream: #f5efe8;
+  --color-shklet-black: #232222;
+  --color-shklet-green: #249e6b;
+  --color-shklet-yellow: #fedb00;
+  --color-shklet-brown: #aa8066;
+  --color-shklet-purple: #cba3d8;
+
+  --font-amsi: var(--font-amsi-fallback), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sirwan: var(--font-sirwan-fallback), ui-sans-serif, system-ui, sans-serif;
+
+  --shadow-elevation-1: 0 1px 2px rgba(35, 34, 34, 0.04), 0 1px 1px rgba(35, 34, 34, 0.03);
+  --shadow-elevation-2: 0 2px 8px rgba(35, 34, 34, 0.06), 0 1px 2px rgba(35, 34, 34, 0.05);
+  --shadow-elevation-3: 0 8px 24px rgba(35, 34, 34, 0.08), 0 2px 6px rgba(35, 34, 34, 0.05);
+  --shadow-glow-red: 0 8px 24px -8px rgba(239, 51, 64, 0.45);
+
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+:root {
+  --background: #efe7db;
+  --background-elevated: #f7f2ea;
+  --foreground: var(--color-shklet-black);
+  --card: #ffffff;
+  --card-border: #e6dccb;
+  --card-border-soft: #eee5d6;
+  --muted: #8f8579;
+  --muted-soft: #b6ada0;
+  --ring: var(--color-shklet-red);
+  --sidebar-bg: #201f1f;
+  --sidebar-bg-elevated: #2a2828;
+  --sidebar-border: rgba(255, 255, 255, 0.07);
+  --sidebar-text: #efe9e3;
+  --sidebar-text-muted: #a49d95;
+  --input-bg: #ffffff;
+  --shadow-elevation-1: 0 1px 2px rgba(35, 34, 34, 0.04), 0 1px 1px rgba(35, 34, 34, 0.03);
+  --shadow-elevation-2: 0 2px 10px rgba(35, 34, 34, 0.07), 0 1px 2px rgba(35, 34, 34, 0.05);
+  --shadow-elevation-3: 0 10px 28px rgba(35, 34, 34, 0.10), 0 2px 8px rgba(35, 34, 34, 0.06);
+}
+
+.dark {
+  --background: #17161a;
+  --background-elevated: #1c1b20;
+  --foreground: #f3efe9;
+  --card: #201f24;
+  --card-border: #34323a;
+  --card-border-soft: #2a2930;
+  --muted: #9a958f;
+  --muted-soft: #6b6870;
+  --ring: var(--color-shklet-red);
+  --sidebar-bg: #16151a;
+  --sidebar-bg-elevated: #1d1c22;
+  --sidebar-border: rgba(255, 255, 255, 0.06);
+  --sidebar-text: #f0ede9;
+  --sidebar-text-muted: #8b8790;
+  --input-bg: #201f24;
+  --shadow-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-elevation-2: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-elevation-3: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+* {
+  border-color: var(--card-border);
+}
+
+html,
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-amsi);
+}
+
+html[lang="ku"],
+html[lang="ku"] body {
+  font-family: var(--font-sirwan);
+}
+
+body {
+  background-image: radial-gradient(circle at 10% -10%, color-mix(in srgb, var(--color-shklet-yellow) 7%, transparent), transparent 45%),
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--color-shklet-purple) 6%, transparent), transparent 40%);
+  background-attachment: fixed;
+}
+
+.dark body {
+  background-image: radial-gradient(circle at 10% -10%, color-mix(in srgb, var(--color-shklet-red) 5%, transparent), transparent 45%),
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--color-shklet-purple) 5%, transparent), transparent 40%);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-shklet-red) 25%, transparent);
+}
+
+/* Keep numbers/prices LTR even inside RTL Kurdish text */
+.ltr-nums {
+  direction: ltr;
+  unicode-bidi: isolate;
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--muted-soft);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Smooth, consistent focus ring across all interactive elements */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in {
+  animation: fade-in 0.35s var(--ease-out-quart) both;
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-scale-in {
+  animation: scale-in 0.2s var(--ease-out-quart) both;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--card-border) 60%, transparent) 25%,
+    color-mix(in srgb, var(--card-border) 30%, transparent) 37%,
+    color-mix(in srgb, var(--card-border) 60%, transparent) 63%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

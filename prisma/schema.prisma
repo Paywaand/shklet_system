@@ -1,0 +1,586 @@
+// Shklet Kiosk — Sales & Management System
+// Prisma schema — PostgreSQL
+// See /docs or README.md for the module-by-module rationale.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  MANAGER
+  CASHIER
+}
+
+enum OrderType {
+  WALKIN
+  DELIVERY
+}
+
+enum OrderStatus {
+  PLACED
+  READY
+  DRIVER_ARRIVED
+  COLLECTED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  PLATFORM
+}
+
+enum StockMovementType {
+  ADD
+  REMOVE
+}
+
+enum StockMovementReason {
+  DELIVERY
+  DAILY_USAGE
+  WASTAGE
+  MANUAL_CORRECTION
+  OTHER
+}
+
+enum RecipeSourceType {
+  WAREHOUSE_ITEM
+  BATCH
+  MANUAL
+}
+
+enum ExpenseCategory {
+  RENT
+  UTILITIES
+  SUPPLIES
+  STAFF
+  OTHER
+}
+
+enum EventStatus {
+  ACTIVE
+  CLOSED
+}
+
+enum CashSource {
+  SAFE
+  MANAGER
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cities & Branches (module 0)
+// ─────────────────────────────────────────────────────────────────────────
+
+model City {
+  id        String   @id @default(cuid())
+  name      String // English name, e.g. "Sulaymaniyah"
+  nameKu    String // Kurdish name, e.g. "سلێمانی"
+  slug      String   @unique // "sulaymaniyah" | "erbil"
+  createdAt DateTime @default(now())
+
+  branches             Branch[]
+  users                User[]
+  menuItemPrices       MenuItemCityPrice[]
+  inventoryCategories  InventoryCategory[]
+  inventoryItems       InventoryItem[]
+  dailyNeedsChecklists DailyNeedsChecklist[]
+  expenses             Expense[]
+  safeDeposits         SafeDeposit[]
+  withdrawals          Withdrawal[]
+  dispatches           Dispatch[]
+}
+
+model Branch {
+  id              String   @id @default(cuid())
+  cityId          String
+  city            City     @relation(fields: [cityId], references: [id])
+  name            String // English, e.g. "Branch 1"
+  nameKu          String
+  pagerRangeStart Int      @default(1)
+  pagerRangeEnd   Int      @default(30)
+  createdAt       DateTime @default(now())
+
+  users  User[]
+  orders Order[]
+
+  @@index([cityId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Auth / Staff (modules 13, 14)
+// ─────────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  username      String    @unique
+  passwordHash  String
+  fullName      String
+  role          Role
+  active        Boolean   @default(true)
+  cityId        String? // required when role = MANAGER
+  city          City?     @relation(fields: [cityId], references: [id])
+  branchId      String? // required when role = CASHIER
+  branch        Branch?   @relation(fields: [branchId], references: [id])
+  monthlySalary Int? // admin-only field, stripped from API for non-admins
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions             Session[]
+  auditLogs            AuditLog[]
+  orders               Order[]
+  stockMovements       StockMovement[]
+  expenses             Expense[]
+  safeDeposits         SafeDeposit[]
+  withdrawals          Withdrawal[]
+  batchProductions     BatchProduction[]
+  dispatches           Dispatch[]
+  dailyNeedsChecklists DailyNeedsChecklist[]
+
+  @@index([cityId])
+  @@index([branchId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  action     String // human readable, e.g. "placed order #A3F9K"
+  entityType String? // e.g. "Order", "MenuItem"
+  entityId   String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model RolePermission {
+  id      String  @id @default(cuid())
+  role    Role
+  permKey String // e.g. "cashier.access", "warehouse.access"
+  allowed Boolean @default(true)
+
+  @@unique([role, permKey])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Menu Management (module 2)
+// ─────────────────────────────────────────────────────────────────────────
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String
+  nameKu    String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  items MenuItem[]
+}
+
+model MenuItem {
+  id          String   @id @default(cuid())
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
+  name        String
+  nameKu      String
+  description String?
+  imageUrl    String?
+  basePrice   Int // fallback price if no per-city override exists
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cityPrices     MenuItemCityPrice[]
+  modifierGroups ModifierGroup[]
+  orderItems     OrderItem[]
+  recipe         Recipe?
+
+  @@index([categoryId])
+}
+
+// Per-city price + availability override (module 0 / 2)
+model MenuItemCityPrice {
+  id         String   @id @default(cuid())
+  menuItemId String
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  cityId     String
+  city       City     @relation(fields: [cityId], references: [id])
+  price      Int
+  available  Boolean  @default(true)
+
+  @@unique([menuItemId, cityId])
+  @@index([cityId])
+}
+
+model ModifierGroup {
+  id         String   @id @default(cuid())
+  menuItemId String
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  name       String
+  nameKu     String
+  required   Boolean  @default(false)
+  sortOrder  Int      @default(0)
+
+  options ModifierOption[]
+}
+
+model ModifierOption {
+  id         String        @id @default(cuid())
+  groupId    String
+  group      ModifierGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  name       String
+  nameKu     String
+  extraPrice Int           @default(0)
+  sortOrder  Int           @default(0)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cashier / POS + Active Orders (module 1)
+// ─────────────────────────────────────────────────────────────────────────
+
+model Order {
+  id            String        @id @default(cuid())
+  code          String        @unique // short human-facing code, e.g. "7K4QP"
+  branchId      String
+  branch        Branch        @relation(fields: [branchId], references: [id])
+  cashierId     String
+  cashier       User          @relation(fields: [cashierId], references: [id])
+  type          OrderType     @default(WALKIN)
+  status        OrderStatus   @default(PLACED)
+  pagerNumber   Int? // null for delivery orders
+  paymentMethod PaymentMethod @default(CASH)
+
+  subtotal Int
+  total    Int
+
+  // Delivery-specific fields (kept out of main sales aggregates)
+  deliveryReference     String?
+  deliveryCommissionPct Float?
+  deliveryGross         Int?
+  deliveryNet           Int?
+
+  eventId String?
+  event   Event?  @relation(fields: [eventId], references: [id])
+
+  placedAt        DateTime  @default(now())
+  readyAt         DateTime?
+  driverArrivedAt DateTime?
+  collectedAt     DateTime?
+  cancelledAt     DateTime?
+
+  offlineCreated Boolean @default(false) // was this queued offline then synced?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items OrderItem[]
+
+  @@index([branchId, status])
+  @@index([placedAt])
+  @@index([eventId])
+}
+
+model OrderItem {
+  id             String    @id @default(cuid())
+  orderId        String
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItemId     String?
+  menuItem       MenuItem? @relation(fields: [menuItemId], references: [id])
+  nameSnapshot   String // frozen at order time (English)
+  nameKuSnapshot String // frozen at order time (Kurdish)
+  unitPrice      Int
+  quantity       Int       @default(1)
+  lineTotal      Int
+
+  modifiers OrderItemModifier[]
+
+  @@index([orderId])
+}
+
+model OrderItemModifier {
+  id          String    @id @default(cuid())
+  orderItemId String
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  groupName   String
+  optionName  String
+  extraPrice  Int       @default(0)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Warehouse / Inventory (module 3) + Daily Needs (module 4)
+// ─────────────────────────────────────────────────────────────────────────
+
+model InventoryCategory {
+  id     String @id @default(cuid())
+  cityId String
+  city   City   @relation(fields: [cityId], references: [id])
+  name   String
+  nameKu String
+  color  String @default("#AA8066")
+
+  items InventoryItem[]
+
+  @@index([cityId])
+}
+
+model InventoryItem {
+  id            String             @id @default(cuid())
+  cityId        String
+  city          City               @relation(fields: [cityId], references: [id])
+  categoryId    String?
+  category      InventoryCategory? @relation(fields: [categoryId], references: [id])
+  name          String
+  nameKu        String
+  unit          String // kg | g | litre | ml | piece | box | ...
+  quantity      Decimal            @default(0) @db.Decimal(12, 3)
+  minThreshold  Decimal            @default(0) @db.Decimal(12, 3)
+  unitCost      Decimal            @default(0) @db.Decimal(12, 2) // latest derived unit cost
+  subUnitFactor Decimal?           @db.Decimal(12, 3) // e.g. 6 units per box
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  movements         StockMovement[]
+  recipeLines       RecipeLine[]
+  batchIngredients  BatchIngredient[]
+  dailyNeedsEntries DailyNeedsEntry[]
+
+  @@index([cityId])
+  @@index([categoryId])
+}
+
+model StockMovement {
+  id             String              @id @default(cuid())
+  itemId         String
+  item           InventoryItem       @relation(fields: [itemId], references: [id])
+  type           StockMovementType
+  amount         Decimal             @db.Decimal(12, 3)
+  totalCost      Int? // only for ADD movements (delivery cost)
+  unitCostAtTime Decimal             @db.Decimal(12, 2)
+  reason         StockMovementReason
+  note           String?
+  eventId        String?
+  event          Event?              @relation(fields: [eventId], references: [id])
+  userId         String
+  user           User                @relation(fields: [userId], references: [id])
+  edited         Boolean             @default(false)
+  createdAt      DateTime            @default(now())
+
+  @@index([itemId])
+  @@index([eventId])
+}
+
+model DailyNeedsChecklist {
+  id              String   @id @default(cuid())
+  cityId          String
+  city            City     @relation(fields: [cityId], references: [id])
+  businessDate    DateTime
+  completedBy     String
+  completedByUser User     @relation(fields: [completedBy], references: [id])
+  createdAt       DateTime @default(now())
+
+  entries DailyNeedsEntry[]
+
+  @@index([cityId, businessDate])
+}
+
+model DailyNeedsEntry {
+  id              String              @id @default(cuid())
+  checklistId     String
+  checklist       DailyNeedsChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  inventoryItemId String
+  inventoryItem   InventoryItem       @relation(fields: [inventoryItemId], references: [id])
+  needsRestock    Boolean             @default(false)
+  note            String?
+
+  @@index([checklistId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Production / Recipe costing (module 6) + Ingredient Usage (module 5)
+// + Estimated Profit (module 7, purely derived — no dedicated table)
+// ─────────────────────────────────────────────────────────────────────────
+
+model Recipe {
+  id         String   @id @default(cuid())
+  menuItemId String   @unique
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  lines RecipeLine[]
+}
+
+model RecipeLine {
+  id               String           @id @default(cuid())
+  recipeId         String
+  recipe           Recipe           @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  sourceType       RecipeSourceType
+  warehouseItemId  String?
+  warehouseItem    InventoryItem?   @relation(fields: [warehouseItemId], references: [id])
+  batchId          String?
+  batch            Batch?           @relation(fields: [batchId], references: [id])
+  manualCost       Decimal?         @db.Decimal(12, 2)
+  amountPerServing Decimal          @db.Decimal(12, 4)
+
+  @@index([recipeId])
+}
+
+model Batch {
+  id          String   @id @default(cuid())
+  name        String
+  nameKu      String
+  unit        String
+  totalAmount Decimal  @db.Decimal(12, 3) // total yield from one production run
+  costPerUnit Decimal  @default(0) @db.Decimal(12, 4)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  ingredients BatchIngredient[]
+  productions BatchProduction[]
+  recipeLines RecipeLine[]
+  dispatches  Dispatch[]
+}
+
+model BatchIngredient {
+  id              String        @id @default(cuid())
+  batchId         String
+  batch           Batch         @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  warehouseItemId String
+  warehouseItem   InventoryItem @relation(fields: [warehouseItemId], references: [id])
+  amount          Decimal       @db.Decimal(12, 3) // amount needed per one full batch run
+}
+
+model BatchProduction {
+  id           String   @id @default(cuid())
+  batchId      String
+  batch        Batch    @relation(fields: [batchId], references: [id])
+  quantityMade Decimal  @db.Decimal(12, 3)
+  totalCost    Decimal  @db.Decimal(12, 2)
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  producedAt   DateTime @default(now())
+}
+
+model Dispatch {
+  id           String   @id @default(cuid())
+  batchId      String
+  batch        Batch    @relation(fields: [batchId], references: [id])
+  cityId       String // destination city
+  city         City     @relation(fields: [cityId], references: [id])
+  quantity     Decimal  @db.Decimal(12, 3)
+  cost         Decimal  @db.Decimal(12, 2)
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  dispatchedAt DateTime @default(now())
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Expenses (module 8)
+// ─────────────────────────────────────────────────────────────────────────
+
+model Expense {
+  id          String          @id @default(cuid())
+  cityId      String
+  city        City            @relation(fields: [cityId], references: [id])
+  category    ExpenseCategory
+  amount      Int
+  description String?
+  date        DateTime
+  eventId     String?
+  event       Event?          @relation(fields: [eventId], references: [id])
+  userId      String
+  user        User            @relation(fields: [userId], references: [id])
+  createdAt   DateTime        @default(now())
+
+  @@index([cityId, date])
+  @@index([eventId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Events (module 9)
+// ─────────────────────────────────────────────────────────────────────────
+
+model Event {
+  id            String      @id @default(cuid())
+  name          String
+  nameKu        String
+  locationLabel String?
+  startDate     DateTime
+  endDate       DateTime?
+  status        EventStatus @default(ACTIVE)
+  closedAt      DateTime?
+  evalRevenue   Int?
+  evalUsageCost Decimal?    @db.Decimal(12, 2)
+  evalExpenses  Int?
+  evalProfit    Int?
+  createdAt     DateTime    @default(now())
+
+  orders         Order[]
+  stockMovements StockMovement[]
+  expenses       Expense[]
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cash Tracking (module 12)
+// ─────────────────────────────────────────────────────────────────────────
+
+model SafeDeposit {
+  id        String   @id @default(cuid())
+  cityId    String
+  city      City     @relation(fields: [cityId], references: [id])
+  amount    Int
+  date      DateTime
+  note      String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@index([cityId, date])
+}
+
+model Withdrawal {
+  id            String     @id @default(cuid())
+  cityId        String
+  city          City       @relation(fields: [cityId], references: [id])
+  amount        Int
+  source        CashSource
+  recipientName String
+  date          DateTime
+  note          String?
+  userId        String
+  user          User       @relation(fields: [userId], references: [id])
+  createdAt     DateTime   @default(now())
+
+  @@index([cityId, date])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// App-wide settings (business hours for business-day boundary, module 10/13)
+// ─────────────────────────────────────────────────────────────────────────
+
+model AppSettings {
+  id          Int @id @default(1)
+  openingHour Int @default(10) // 0-23, local time
+  closingHour Int @default(23) // 0-23, may be < openingHour if crossing midnight
+}
