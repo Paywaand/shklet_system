@@ -10,7 +10,7 @@ export async function POST(req: Request) {
   const branch = await activeBranch(guard.session);
 
   const body = await req.json().catch(() => ({}));
-  const { name, price, categoryId, description, imageUrl, available, modifiers } = body;
+  const { name, nameKu, price, categoryId, description, imageUrl, available, modifiers } = body;
 
   if (!name?.trim()) return NextResponse.json({ error: "Name is required" }, { status: 400 });
   if (!categoryId) return NextResponse.json({ error: "Category is required" }, { status: 400 });
@@ -35,6 +35,7 @@ export async function POST(req: Request) {
   const item = await prisma.menuItem.create({
     data: {
       name: name.trim(),
+      nameKu: nameKu?.trim() || null,
       price: Math.round(priceNum),
       categoryId,
       description: description?.trim() || null,

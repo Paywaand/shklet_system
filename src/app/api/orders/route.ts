@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { authorize, audit } from "@/lib/guard";
 import { generateUniqueOrderShortId } from "@/lib/shortId";
 import { activeBranch } from "@/lib/branchScope";
+import { isValidLocation } from "@/lib/branches";
 
 // POST /api/orders — place a new order (POS).
 export async function POST(req: Request) {
@@ -11,6 +12,7 @@ export async function POST(req: Request) {
   const branch = await activeBranch(guard.session);
 
   const body = await req.json().catch(() => ({}));
+  const location = isValidLocation(branch, body.location) ? body.location ?? null : null;
   const pagerNumber = Number(body.pagerNumber);
   const paymentMethod = body.paymentMethod;
   // Default "walk_in" for backward compatibility with any old clients that don't send it.
@@ -43,10 +45,11 @@ export async function POST(req: Request) {
   if (items.length === 0)
     return NextResponse.json({ error: "Add at least one item" }, { status: 400 });
 
-  // Reject if this pager is already in use by an uncollected order IN THIS
-  // BRANCH (each city has its own physical pager set).
+  // Reject if this pager is already in use by an uncollected order at THIS
+  // physical location (each branch location has its own physical pager set —
+  // Sulaymaniyah's two branches can use the same pager number at once).
   const inUse = await prisma.order.findFirst({
-    where: { branch, pagerNumber, status: { in: ["pending", "ready"] } },
+    where: { branch, location, pagerNumber, status: { in: ["pending", "ready"] } },
   });
   if (inUse)
     return NextResponse.json(
@@ -82,6 +85,7 @@ export async function POST(req: Request) {
       shortId,
       clientId,
       branch,
+      location,
       pagerNumber,
       paymentMethod,
       orderType,

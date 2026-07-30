@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Plus,
   Minus,
@@ -20,10 +20,11 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { useFetch, apiSend } from "@/lib/client";
-import { iqd, num, duration, shortTime } from "@/lib/format";
+import { iqd, num, duration, shortTime, itemName } from "@/lib/format";
 import type { MenuItem, ModifierGroup, Order, DeliveryOrder } from "@/lib/types";
 import { usePosOffline } from "@/lib/offline/usePosOffline";
 import { ModifiersSchema, safeParseJson } from "@/lib/schemas";
+import { ACTIVE_BRANCH_COOKIE, DEFAULT_LOCATION, LOCATION_LABELS, LOCATIONS, isBranch } from "@/lib/branches";
 import { Loading, ErrorState, EmptyState, Modal } from "@/components/ui";
 import { Elapsed } from "@/components/Elapsed";
 import { useToast } from "@/components/Toast";
@@ -44,6 +45,18 @@ const DELIVERY_COLOR_FALLBACK = "#0fb79b";
 type OrderType = "walkin" | "delivery" | "takeaway";
 type DeliveryPlatform = { platformName: string; commissionPct: number; color: string };
 
+// Reads the active-city cookie the sidebar switcher writes (client-only; the
+// page itself is a client component so it can't read the server-resolved
+// branch directly). Falls back to Sulaymaniyah.
+function readActiveCity(): "suli" | "erbil" {
+  if (typeof document === "undefined") return "suli";
+  const match = document.cookie.match(new RegExp(`${ACTIVE_BRANCH_COOKIE}=([^;]+)`));
+  const value = match?.[1];
+  return isBranch(value) ? value : "suli";
+}
+
+const LOCATION_STORAGE_KEY = "shklet_location";
+
 function parseModifiers(json: string | null): ModifierGroup[] {
   // Bounded + schema-validated parse (size cap before JSON.parse) — see lib/schemas.ts.
   return safeParseJson(json, ModifiersSchema, []);
@@ -53,7 +66,24 @@ export default function CashierPage() {
   // Offline-capable data + mutations for branch walk-in orders (menu, active queue,
   // place/ready/collected). Delivery + events stay on normal online fetches.
   const [branch, setBranch] = useState<string>(""); // "" = main 60 Street Branch
-  const pos = usePosOffline(branch);
+  // Physical branch within Sulaymaniyah ("1" | "2"); stays null for Erbil,
+  // which has one location. Persisted per-device (localStorage) — in practice
+  // each physical location keeps its own tablet.
+  const [city, setCity] = useState<"suli" | "erbil">("suli");
+  const [location, setLocationState] = useState<string | null>(DEFAULT_LOCATION.suli);
+  useEffect(() => {
+    const c = readActiveCity();
+    setCity(c);
+    const saved = window.localStorage.getItem(LOCATION_STORAGE_KEY);
+    setLocationState(
+      saved && (LOCATIONS[c] as readonly string[]).includes(saved) ? saved : DEFAULT_LOCATION[c]
+    );
+  }, []);
+  function chooseLocation(next: string) {
+    setLocationState(next);
+    window.localStorage.setItem(LOCATION_STORAGE_KEY, next);
+  }
+  const pos = usePosOffline(branch, location);
   const events = useFetch<{ events: { id: string; name: string }[] }>("/api/events/active");
   // Which delivery app this branch uses (Toters in Suli, Talabat in Erbil) + its
   // accent color. Loaded once; the POS only needs the label/color — the commission
@@ -65,7 +95,7 @@ export default function CashierPage() {
     color: DELIVERY_COLOR_FALLBACK,
   };
   const toast = useToast();
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
 
   const [orderType, setOrderType] = useState<OrderType>("walkin");
   const [reference, setReference] = useState(""); // delivery driver/order ref
@@ -98,12 +128,15 @@ export default function CashierPage() {
     addLine(item);
   }
 
-  function addLine(item: { id: string; name: string; price: number }, modifier?: string) {
+  function addLine(item: MenuItem, modifier?: string) {
     const key = modifier ? `${item.id}::${modifier}` : item.id;
     setCart((c) => {
       const found = c.find((l) => l.key === key);
       if (found) return c.map((l) => (l.key === key ? { ...l, quantity: l.quantity + 1 } : l));
-      return [...c, { key, id: item.id, name: item.name, price: item.price, quantity: 1, modifier }];
+      return [
+        ...c,
+        { key, id: item.id, name: itemName(item, lang), price: item.price, quantity: 1, modifier },
+      ];
     });
   }
 
@@ -138,6 +171,7 @@ export default function CashierPage() {
           orderType: orderType === "takeaway" ? "takeaway" : "walk_in",
           isPaid,
           eventId: branch || null,
+          location,
           items: lineItemsPayload(),
         });
         if (!res.ok) return toast.show(res.error, "error");
@@ -280,6 +314,23 @@ export default function CashierPage() {
             ))}
           </select>
         </div>
+        {city === "suli" && LOCATIONS.suli.length > 0 && (
+          <div className="flex items-center gap-1 rounded-xl border border-black/10 dark:border-white/10 p-1">
+            {LOCATIONS.suli.map((loc) => (
+              <button
+                key={loc}
+                type="button"
+                onClick={() => chooseLocation(loc)}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition",
+                  location === loc ? "bg-corn text-white" : "opacity-60 hover:opacity-100"
+                )}
+              >
+                {LOCATION_LABELS[loc]}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {pos.needsAttention.length > 0 && (
@@ -340,7 +391,7 @@ export default function CashierPage() {
                         onClick={() => onItemTap(item)}
                         className="card p-4 text-left hover:ring-2 hover:ring-corn active:scale-[0.98] transition min-h-[96px] flex flex-col justify-between"
                       >
-                        <p className="font-bold leading-tight">{item.name}</p>
+                        <p className="font-bold leading-tight">{itemName(item, lang)}</p>
                         <p className="text-leaf font-extrabold mt-2">{iqd(item.price)}</p>
                       </button>
                     ))}
@@ -500,7 +551,7 @@ function ModifierModal({
   onClose: () => void;
   onConfirm: (modifier: string) => void;
 }) {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const groups = parseModifiers(item.modifiers);
   const [choices, setChoices] = useState<Record<string, string>>({});
 
@@ -516,7 +567,7 @@ function ModifierModal({
   }
 
   return (
-    <Modal open onClose={onClose} title={item.name}>
+    <Modal open onClose={onClose} title={itemName(item, lang)}>
       <div className="flex flex-col gap-4">
         {groups.map((g) => (
           <div key={g.name}>
@@ -736,29 +787,33 @@ function CartPanel({
             </div>
           </div>
 
-          {/* Paid / unpaid — unobtrusive one-tap toggle, defaults to Paid */}
-          <div className="flex items-center justify-between rounded-xl border border-black/10 dark:border-white/10 px-3 py-2">
-            <span className="text-sm font-semibold opacity-70">{t("cashier.cart.paidStatusLabel")}</span>
-            <div className="flex items-center gap-1.5">
+          {/* Paid / unpaid — defaults to Paid */}
+          <div>
+            <label className="label">{t("cashier.cart.paidStatusLabel")}</label>
+            <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => setIsPaid(true)}
                 className={clsx(
-                  "chip text-xs font-bold",
-                  isPaid ? "bg-leaf text-white" : "bg-black/5 dark:bg-white/10"
+                  "btn py-2.5 border-2",
+                  isPaid
+                    ? "bg-leaf text-white border-leaf"
+                    : "bg-black/5 dark:bg-white/10 border-transparent"
                 )}
               >
-                {t("cashier.cart.paid")}
+                <Check size={18} /> {t("cashier.cart.paid")}
               </button>
               <button
                 type="button"
                 onClick={() => setIsPaid(false)}
                 className={clsx(
-                  "chip text-xs font-bold",
-                  !isPaid ? "bg-red-500 text-white" : "bg-black/5 dark:bg-white/10"
+                  "btn py-2.5 border-2",
+                  !isPaid
+                    ? "bg-red-500 text-white border-red-500"
+                    : "bg-black/5 dark:bg-white/10 border-transparent"
                 )}
               >
-                {t("cashier.cart.notPaidYet")}
+                <AlertTriangle size={18} /> {t("cashier.cart.notPaidYet")}
               </button>
             </div>
           </div>

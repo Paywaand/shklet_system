@@ -1,8 +1,15 @@
 import { closesNextDay, DEFAULT_BUSINESS_HOURS, type BusinessHours } from "./businessDay";
+import type { Lang } from "./i18n/types";
 
 // Format a whole-number amount as Iraqi Dinar with thousands separators.
 export function iqd(amount: number): string {
   return `${Math.round(amount).toLocaleString("en-US")} IQD`;
+}
+
+// Menu item names are stored bilingually (`name` = English, `nameKu` = Kurdish,
+// optional). Falls back to the English name when no Kurdish name is set.
+export function itemName(item: { name: string; nameKu?: string | null }, lang: Lang): string {
+  return lang === "ku" && item.nameKu ? item.nameKu : item.name;
 }
 
 // Format just the number with commas (no currency suffix).

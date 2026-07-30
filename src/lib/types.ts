@@ -9,6 +9,7 @@ export type ModifierGroup = {
 export type MenuItem = {
   id: string;
   name: string;
+  nameKu: string | null;
   price: number;
   description: string | null;
   imageUrl: string | null;

@@ -10,6 +10,7 @@
     "lint": "next lint",
     "setup": "prisma migrate dev --name init && npm run seed",
     "seed": "tsx prisma/seed.ts",
+    "import:menu": "tsx prisma/import-menu.ts",
     "reset-admin": "tsx prisma/reset-admin.ts",
     "demo": "tsx prisma/demo.ts",
     "backup": "tsx scripts/backup-now.ts",

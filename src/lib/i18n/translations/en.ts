@@ -184,6 +184,7 @@ export const en: Dict = {
     itemModal: {
       editItem: "Edit item",
       newItem: "New item",
+      nameKu: "Kurdish name (optional)",
       price: "Price (IQD)",
       descriptionOptional: "Description (optional)",
       availableOnPos: "Available on POS",
@@ -211,8 +212,12 @@ export const en: Dict = {
       subtitle: (vars) => `Restock checklist · ${vars.date}`,
     },
     sections: {
-      food: "Food",
       packaging: "Packaging",
+      sauceAndPancake: "Sauce & Pancake",
+      topping: "Topping",
+      bakery: "Bakery",
+      drinks: "Drinks",
+      iceCream: "Ice Cream",
       cleaning: "Cleaning",
     },
     inputs: {

@@ -17,35 +17,106 @@ type Section = { key: string; title: string; rtl: boolean; items: string[] };
 
 const SECTIONS: Section[] = [
   {
-    key: "food",
-    title: "Food",
-    rtl: true,
-    items: [
-      "پەنیر",
-      "کەرێ",
-      "خوێ",
-      "ئاو",
-    ],
-  },
-  {
     key: "packaging",
     title: "Packaging",
     rtl: true,
     items: [
+      "چیلکه",
       "کەوچک",
-      "کوپ",
-      "سەر کوپ",
-      "دەسکێش",
-      "کلێنس",
+      "چەتاڵ",
+      "قاپی مەقلوبە",
+      "سەرقاپ",
+      "سینی مەقلوبە",
+      "کوپی 14Oz",
+      "کوپی درینک",
+      "سەری کوپ",
       "ستیکەر",
-      "عەلاگەی سەفەری",
+      "عەلاگەی سەفەری سپی",
+      "هۆڵدەر",
+    ],
+  },
+  {
+    key: "sauceAndPancake",
+    title: "Sauce & Pancake",
+    rtl: true,
+    items: [
+      "نۆتێلا",
+      "چوکلەیت",
+      "سۆسی فستق",
+      "شلیکی ئاسای",
+      "مۆز",
+      "ئاو",
+      "کەرێ",
+      "زەیت",
+      "پانکەیک",
+      "شەعریە",
+      "کێک",
+    ],
+  },
+  {
+    key: "topping",
+    title: "Topping",
+    rtl: true,
+    items: ["ئۆریۆ", "زینە", "M&Ms", "مارشمێلۆ", "فستقی هاڕاو", "فستقی گەورە"],
+  },
+  {
+    key: "bakery",
+    title: "Bakery",
+    rtl: true,
+    items: [
+      "تیرامیسۆی کلاسیک",
+      "کاکو",
+      "تیرامیسۆی فستق",
+      "براونی",
+      "بروکی",
+      "کوکیز",
+      "پاکێجی بەیکەری",
+      "سەری پاکێج",
+    ],
+  },
+  {
+    key: "drinks",
+    title: "Drinks",
+    rtl: true,
+    items: [
+      "سیرەپی شلیک، قاوە و پرتەقاڵ",
+      "شکلیکی بەستوو یان هاڕاو",
+      "نەعنا",
+      "فرۆتی",
+      "پرتەقاڵی وشک",
+      "لیمۆ",
+      "ئاوی بەراد",
+      "قەسەب",
+    ],
+  },
+  {
+    key: "iceCream",
+    title: "Ice Cream",
+    rtl: true,
+    items: [
+      "کوپی ئایسکرێم",
+      "کەوچک",
+      "پوریی شلیک و قۆپ",
+      "شلکی بەستوو",
+      "قۆخی بەستوو",
+      "ئایسکرێمی سادە",
+      "بوکەڵە",
     ],
   },
   {
     key: "cleaning",
     title: "Cleaning",
     rtl: true,
-    items: ["زاهی", "شاڵ", "تەل", "عەلاگەی خۆڵ"],
+    items: [
+      "دەستکێشی رەش",
+      "عەلاگەی رەش",
+      "موعجیزە",
+      "زاهی",
+      "شاڵ",
+      "کلێنسی تەڕ",
+      "کلێنس",
+      "پەڕۆ",
+    ],
   },
 ];
 
@@ -344,7 +415,7 @@ export default function DailyNeedsPage() {
             />
             <div>
               <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: 0.5 }}>CORN&apos;ER</div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "#55931B" }}>{t("dailyNeeds.header.title")}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#AA8066" }}>{t("dailyNeeds.header.title")}</div>
             </div>
           </div>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>{dateLabel}</div>
@@ -360,7 +431,7 @@ export default function DailyNeedsPage() {
                   style={{
                     fontSize: 16,
                     fontWeight: 900,
-                    color: "#55931B",
+                    color: "#AA8066",
                     marginBottom: 6,
                     borderBottom: "2px solid rgba(89,51,28,0.15)",
                     paddingBottom: 3,

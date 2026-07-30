@@ -16,6 +16,7 @@ export async function PATCH(req: Request, props: { params: Promise<{ id: string 
   const body = await req.json().catch(() => ({}));
   const data: Record<string, unknown> = {};
   if (typeof body.name === "string") data.name = body.name.trim();
+  if (body.nameKu !== undefined) data.nameKu = body.nameKu?.trim() || null;
   if (body.price !== undefined) {
     const p = Number(body.price);
     if (!Number.isFinite(p) || p < 0)

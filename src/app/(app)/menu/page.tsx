@@ -112,6 +112,11 @@ export default function MenuPage() {
                         {item.name}
                         {!item.available && <EyeOff size={14} className="opacity-60" />}
                       </p>
+                      {item.nameKu && (
+                        <p className="text-xs opacity-60 truncate" dir="rtl">
+                          {item.nameKu}
+                        </p>
+                      )}
                       <p className="text-sm text-leaf font-bold">{iqd(item.price)}</p>
                       {item.description && (
                         <p className="text-xs opacity-60 truncate">{item.description}</p>
@@ -239,6 +244,7 @@ function ItemModal({
   onSaved: () => void;
 }) {
   const [name, setName] = useState(item?.name ?? "");
+  const [nameKu, setNameKu] = useState(item?.nameKu ?? "");
   const [price, setPrice] = useState(item?.price?.toString() ?? "");
   const [description, setDescription] = useState(item?.description ?? "");
   const [catId, setCatId] = useState(item?.categoryId ?? categoryId);
@@ -267,6 +273,7 @@ function ItemModal({
         .filter((g) => g.name && g.options.length);
       const payload = {
         name,
+        nameKu,
         price,
         description,
         categoryId: catId,
@@ -289,6 +296,15 @@ function ItemModal({
         <div>
           <label className="label">{t("common.name")}</label>
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </div>
+        <div>
+          <label className="label">{t("menu.itemModal.nameKu")}</label>
+          <input
+            className="input"
+            dir="rtl"
+            value={nameKu}
+            onChange={(e) => setNameKu(e.target.value)}
+          />
         </div>
         <div>
           <label className="label">{t("menu.itemModal.price")}</label>

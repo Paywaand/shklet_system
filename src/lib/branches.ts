@@ -14,6 +14,29 @@ export const BRANCH_LABELS: Record<Branch, string> = {
 
 export const DEFAULT_BRANCH: Branch = "suli";
 
+// Physical branches within a city. Sulaymaniyah has two separately-operated
+// locations (own pager set, own active order queue); Erbil has one, so its
+// orders always carry `location: null`.
+export const LOCATIONS: Record<Branch, readonly string[]> = {
+  suli: ["1", "2"],
+  erbil: [],
+};
+
+export const LOCATION_LABELS: Record<string, string> = {
+  "1": "Branch 1",
+  "2": "Branch 2",
+};
+
+export const DEFAULT_LOCATION: Record<Branch, string | null> = {
+  suli: "1",
+  erbil: null,
+};
+
+export function isValidLocation(branch: Branch, location: unknown): location is string | null {
+  if (location === null || location === undefined) return LOCATIONS[branch].length === 0;
+  return typeof location === "string" && (LOCATIONS[branch] as readonly string[]).includes(location);
+}
+
 // Cookie holding the admin's currently-viewed branch. NOT httpOnly on purpose:
 // the sidebar switcher writes it with document.cookie and refreshes.
 export const ACTIVE_BRANCH_COOKIE = "shklet_branch";

@@ -80,9 +80,9 @@ export type PlaceResult = { ok: true; queued: boolean } | { ok: false; error: st
 
 // branchId: "" = main 60 Street Branch, otherwise an event id. Determines which
 // branch/event's active-orders queue is fetched and cached.
-export function usePosOffline(branchId: string = "") {
+export function usePosOffline(branchId: string = "", location: string | null = null) {
   const online = useOnline();
-  const cacheKey = `active:${branchId || "main"}`;
+  const cacheKey = `active:${branchId || "main"}:${location ?? "-"}`;
 
   const [menu, setMenu] = useState<MenuPayload | null>(null);
   const [menuError, setMenuError] = useState<string | null>(null);
@@ -119,9 +119,9 @@ export function usePosOffline(branchId: string = "") {
   }, []);
 
   const loadActive = useCallback(async () => {
-    const res = await getJson<ActivePayload>(
-      `/api/orders/active?eventId=${encodeURIComponent(branchId || "main")}`
-    );
+    const params = new URLSearchParams({ eventId: branchId || "main" });
+    if (location) params.set("location", location);
+    const res = await getJson<ActivePayload>(`/api/orders/active?${params.toString()}`);
     if (res.ok) {
       setActiveRaw(res.data);
       await cachePut(cacheKey, res.data);
@@ -129,7 +129,7 @@ export function usePosOffline(branchId: string = "") {
       const cached = await cacheGet<ActivePayload>(cacheKey);
       if (cached) setActiveRaw(cached);
     }
-  }, [branchId, cacheKey]);
+  }, [branchId, location, cacheKey]);
 
   const syncNow = useCallback(async () => {
     if (syncingRef.current) return;

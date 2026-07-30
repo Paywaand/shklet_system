@@ -83,6 +83,7 @@ model Category {
 model MenuItem {
   id          String   @id @default(cuid())
   name        String
+  nameKu      String? // Kurdish name, shown when the UI language is set to Kurdish
   price       Int // stored as whole IQD
   description String?
   imageUrl    String?
@@ -107,6 +108,10 @@ model Order {
   // the server returns the existing order instead of creating a duplicate.
   clientId        String?     @unique
   branch          String      @default("suli") // "suli" | "erbil"
+  // Physical branch within the city — Sulaymaniyah has two ("1" | "2"); Erbil
+  // has one and this stays null. Active queue + pager uniqueness are scoped by
+  // (branch, location) so each physical location has its own pager set.
+  location        String?
   pagerNumber     Int
   total           Int
   paymentMethod   String // cash | card
@@ -127,6 +132,7 @@ model Order {
   @@index([status])
   @@index([eventId])
   @@index([branch])
+  @@index([branch, location])
 }
 
 model OrderItem {

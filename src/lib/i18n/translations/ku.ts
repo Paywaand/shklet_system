@@ -184,6 +184,7 @@ export const ku: Dict = {
     itemModal: {
       editItem: "دەستکاریکردنی بابەت",
       newItem: "بابەتی نوێ",
+      nameKu: "ناوی کوردی (ئارەزوومەندانە)",
       price: "نرخ (دینار)",
       descriptionOptional: "وەسف (ناچاری نییە)",
       availableOnPos: "بەردەستە لەسەر کاشێر",
@@ -211,9 +212,13 @@ export const ku: Dict = {
       subtitle: (vars) => `لیستی پشکنینی پڕکردنەوەی کۆگا · ${vars.date}`,
     },
     sections: {
-      food: "خۆراک",
-      packaging: "پێچانەوە و کارتۆن",
-      cleaning: "پاککردنەوە",
+      packaging: "سەفەری",
+      sauceAndPancake: "سۆس و پانکەیک",
+      topping: "تۆپینگ",
+      bakery: "بەیکەری",
+      drinks: "خواردنەوەکان",
+      iceCream: "ئایسکرێم",
+      cleaning: "پاککەرەوە",
     },
     inputs: {
       amountPlaceholder: "بۆ نموونە 1 سندوق",
