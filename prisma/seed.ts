@@ -1,239 +1,156 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { DEFAULT_GRANTS, PERMISSIONS, ROLES } from "../src/lib/permissions";
+import { DEFAULT_INVENTORY_CATEGORIES } from "../src/lib/categories";
+import { BRANCHES, DEFAULT_DELIVERY } from "../src/lib/branches";
+import { generateUniqueOrderShortId } from "../src/lib/shortId";
 
 const prisma = new PrismaClient();
 
+// Starter menu — one identical set per branch (each branch manages its own menu
+// afterwards; nothing is shared between Suli and Erbil).
+const MENU: {
+  category: string;
+  items: { name: string; price: number; description?: string; modifiers?: string }[];
+}[] = [
+  {
+    category: "Snacks",
+    items: [
+      { name: "Classic", price: 3500, description: "Best seller" },
+      { name: "Special", price: 4500 },
+    ],
+  },
+];
+
+// Starter warehouse items per branch.
+const INVENTORY: { name: string; unit: string; quantity: number; minThreshold: number }[] = [
+  { name: "Flour", unit: "kg", quantity: 40, minThreshold: 10 },
+  { name: "Cheese", unit: "kg", quantity: 8, minThreshold: 3 },
+  { name: "Butter", unit: "kg", quantity: 6, minThreshold: 2 },
+  { name: "Paper Boxes", unit: "piece", quantity: 500, minThreshold: 100 },
+  { name: "Forks", unit: "piece", quantity: 600, minThreshold: 150 },
+  { name: "Salt", unit: "kg", quantity: 4, minThreshold: 1 },
+];
+
 async function main() {
-  console.log("Seeding Shklet database…");
-
-  // ── Cities ────────────────────────────────────────────────────────────
-  const suly = await prisma.city.upsert({
-    where: { slug: "sulaymaniyah" },
-    update: {},
-    create: { slug: "sulaymaniyah", name: "Sulaymaniyah", nameKu: "سلێمانی" },
-  });
-  const erbil = await prisma.city.upsert({
-    where: { slug: "erbil" },
-    update: {},
-    create: { slug: "erbil", name: "Erbil", nameKu: "هەولێر" },
-  });
-
-  // ── Branches: Sulaymaniyah x2, Erbil x1 ─────────────────────────────────
-  const existingBranches = await prisma.branch.findMany();
-  let sulyBranch1 = existingBranches.find((b) => b.name === "Branch 1" && b.cityId === suly.id);
-  if (!sulyBranch1) {
-    sulyBranch1 = await prisma.branch.create({
-      data: { cityId: suly.id, name: "Branch 1", nameKu: "لقی 1" },
-    });
-  }
-  let sulyBranch2 = existingBranches.find((b) => b.name === "Branch 2" && b.cityId === suly.id);
-  if (!sulyBranch2) {
-    sulyBranch2 = await prisma.branch.create({
-      data: { cityId: suly.id, name: "Branch 2", nameKu: "لقی 2" },
-    });
-  }
-  let erbilBranch = existingBranches.find((b) => b.cityId === erbil.id);
-  if (!erbilBranch) {
-    erbilBranch = await prisma.branch.create({
-      data: { cityId: erbil.id, name: "Main Branch", nameKu: "لقی سەرەکی" },
-    });
-  }
-
-  // ── App settings (business hours) ──────────────────────────────────────
-  await prisma.appSettings.upsert({
-    where: { id: 1 },
-    update: {},
-    create: { id: 1, openingHour: 10, closingHour: 1 }, // open 10:00, close 01:00
-  });
-
-  // ── Staff ────────────────────────────────────────────────────────────
-  const adminPasswordHash = await bcrypt.hash("Shklet@2026", 10);
-  await prisma.user.upsert({
-    where: { username: "admin" },
-    update: {},
-    create: {
-      username: "admin",
-      passwordHash: adminPasswordHash,
-      fullName: "Admin",
-      role: "ADMIN",
-    },
-  });
-
-  const managerPasswordHash = await bcrypt.hash("Manager@2026", 10);
-  await prisma.user.upsert({
-    where: { username: "suly.manager" },
-    update: {},
-    create: {
-      username: "suly.manager",
-      passwordHash: managerPasswordHash,
-      fullName: "Sulaymaniyah Manager",
-      role: "MANAGER",
-      cityId: suly.id,
-    },
-  });
-
-  const cashierPasswordHash = await bcrypt.hash("Cashier@2026", 10);
-  await prisma.user.upsert({
-    where: { username: "suly.cashier1" },
-    update: {},
-    create: {
-      username: "suly.cashier1",
-      passwordHash: cashierPasswordHash,
-      fullName: "Sulaymaniyah Branch 1 Cashier",
-      role: "CASHIER",
-      branchId: sulyBranch1.id,
-    },
-  });
-
-  // ── Menu: Categories + items + per-city pricing ─────────────────────────
-  // Sourced verbatim from shklet_menu_seed.md.
-  type SeedItem = {
-    name: string;
-    nameKu: string;
-    sulyPrice: number | null;
-    erbilPrice: number | null;
-  };
-  type SeedCategory = { name: string; nameKu: string; items: SeedItem[] };
-
-  const categories: SeedCategory[] = [
-    {
-      name: "Cups",
-      nameKu: "کاپەکان",
-      items: [
-        { name: "Dubai Special", nameKu: "دوبەی سپێشەڵ", sulyPrice: 6000, erbilPrice: 6000 },
-        { name: "Mini Pancakes", nameKu: "مینی پانکەیک", sulyPrice: 5000, erbilPrice: 5000 },
-        { name: "Maqluba", nameKu: "مەقلوبە", sulyPrice: 9000, erbilPrice: 11000 },
-        { name: "Shklet Special", nameKu: "سپێشەڵی شکلێت", sulyPrice: 5000, erbilPrice: 5000 },
-        { name: "Fruit Chocolate", nameKu: "میوە بە چۆکلەیت", sulyPrice: 5000, erbilPrice: null },
-      ],
-    },
-    {
-      name: "Drinks",
-      nameKu: "خواردنەوەکان",
-      items: [
-        { name: "Breeze", nameKu: "شکلێت بریز", sulyPrice: 5000, erbilPrice: 5000 },
-        { name: "Midnight", nameKu: "میدنایت", sulyPrice: 5000, erbilPrice: 5000 },
-      ],
-    },
-    {
-      name: "Baked Goods",
-      nameKu: "شیرینی برژاو",
-      items: [
-        { name: "Cookies", nameKu: "کووکی بچووک", sulyPrice: 5500, erbilPrice: 6500 },
-        { name: "Tiramisu", nameKu: "ترامیسو", sulyPrice: 5000, erbilPrice: 6000 },
-        { name: "Brownie", nameKu: "براونی", sulyPrice: 6500, erbilPrice: null },
-        { name: "Brookie", nameKu: "بروکی", sulyPrice: 6000, erbilPrice: null },
-      ],
-    },
-    {
-      name: "Ice Cream",
-      nameKu: "ئایس کرێم",
-      items: [
-        { name: "Peach", nameKu: "قۆخ", sulyPrice: 3500, erbilPrice: 4000 },
-        { name: "Strawberry", nameKu: "شلیک", sulyPrice: 3500, erbilPrice: 4000 },
-        { name: "Pistachio", nameKu: "فستق", sulyPrice: 4000, erbilPrice: 4500 },
-        { name: "Cookies and Ice Cream", nameKu: "کووکی و ئایس کرێم", sulyPrice: 5500, erbilPrice: 6000 },
-        { name: "Ice Cream Special", nameKu: "ئایس کرێم سپێشەڵ", sulyPrice: 5500, erbilPrice: 6000 },
-      ],
-    },
-    {
-      name: "Extras",
-      nameKu: "زیادەکان",
-      items: [
-        { name: "Extra Chocolate", nameKu: "چۆکلەیتی زیاده", sulyPrice: 1500, erbilPrice: 1500 },
-      ],
-    },
-  ];
-
-  let categorySort = 0;
-  for (const cat of categories) {
-    const category = await prisma.category.upsert({
-      where: { id: `seed-cat-${cat.name.toLowerCase().replace(/\s+/g, "-")}` },
-      update: {},
-      create: {
-        id: `seed-cat-${cat.name.toLowerCase().replace(/\s+/g, "-")}`,
-        name: cat.name,
-        nameKu: cat.nameKu,
-        sortOrder: categorySort++,
+  // --- Default super admin account (branch = null → all branches) ---
+  // SECURITY: only create the admin when it's missing (first boot / empty DB). We
+  // never touch an existing admin's password, so a password changed in the app
+  // survives every redeploy. Do NOT change this to overwrite the password on update.
+  const existingAdmin = await prisma.user.findUnique({ where: { username: "admin" } });
+  if (!existingAdmin) {
+    await prisma.user.create({
+      data: {
+        username: "admin",
+        password: await bcrypt.hash("admin123", 10),
+        fullName: "Administrator",
+        role: "admin",
+        branch: null, // super admin — sees/switches both branches
       },
     });
-
-    let itemSort = 0;
-    for (const item of cat.items) {
-      const basePrice = item.sulyPrice ?? item.erbilPrice ?? 0;
-      const menuItem = await prisma.menuItem.upsert({
-        where: { id: `seed-item-${category.id}-${item.name.toLowerCase().replace(/\s+/g, "-")}` },
-        update: {},
-        create: {
-          id: `seed-item-${category.id}-${item.name.toLowerCase().replace(/\s+/g, "-")}`,
-          categoryId: category.id,
-          name: item.name,
-          nameKu: item.nameKu,
-          basePrice,
-          sortOrder: itemSort++,
-        },
-      });
-
-      if (item.sulyPrice !== null) {
-        await prisma.menuItemCityPrice.upsert({
-          where: { menuItemId_cityId: { menuItemId: menuItem.id, cityId: suly.id } },
-          update: { price: item.sulyPrice, available: true },
-          create: { menuItemId: menuItem.id, cityId: suly.id, price: item.sulyPrice, available: true },
-        });
-      }
-      if (item.erbilPrice !== null) {
-        await prisma.menuItemCityPrice.upsert({
-          where: { menuItemId_cityId: { menuItemId: menuItem.id, cityId: erbil.id } },
-          update: { price: item.erbilPrice, available: true },
-          create: { menuItemId: menuItem.id, cityId: erbil.id, price: item.erbilPrice, available: true },
-        });
-      } else {
-        // Explicitly mark unavailable in Erbil so the POS never shows it there.
-        await prisma.menuItemCityPrice.upsert({
-          where: { menuItemId_cityId: { menuItemId: menuItem.id, cityId: erbil.id } },
-          update: { available: false },
-          create: {
-            menuItemId: menuItem.id,
-            cityId: erbil.id,
-            price: item.sulyPrice ?? 0,
-            available: false,
-          },
-        });
-      }
-    }
+    console.log("✓ Created default super admin (admin / admin123) — change this after first login");
+  } else {
+    console.log("• Admin account already exists — password left unchanged");
   }
 
-  // ── Inventory categories (per city) ────────────────────────────────────
-  const invCategoryDefs = [
-    { name: "Drink Ingredients", nameKu: "پێکهاتەکانی خواردنەوە", color: "#249E6B" },
-    { name: "Packaging", nameKu: "پاکەتبەندی", color: "#AA8066" },
-    { name: "Cleaning", nameKu: "پاکژکردنەوە", color: "#CBA3D8" },
-  ];
-  for (const city of [suly, erbil]) {
-    for (const def of invCategoryDefs) {
-      const id = `seed-inv-cat-${city.slug}-${def.name.toLowerCase().replace(/\s+/g, "-")}`;
-      await prisma.inventoryCategory.upsert({
-        where: { id },
+  // --- Role permissions matrix ---
+  for (const role of ROLES) {
+    for (const perm of PERMISSIONS) {
+      const allowed = DEFAULT_GRANTS[role].includes(perm.key);
+      await prisma.rolePermission.upsert({
+        where: { role_key: { role, key: perm.key } },
         update: {},
-        create: { id, cityId: city.id, name: def.name, nameKu: def.nameKu, color: def.color },
+        create: { role, key: perm.key, allowed },
       });
     }
   }
+  console.log("✓ Seeded role permissions matrix");
 
-  console.log("Seed complete.");
-  console.log("─────────────────────────────────────────");
-  console.log("Default accounts (CHANGE THESE PASSWORDS):");
-  console.log("  admin           / Shklet@2026   (ADMIN)");
-  console.log("  suly.manager    / Manager@2026  (MANAGER — Sulaymaniyah)");
-  console.log("  suly.cashier1   / Cashier@2026  (CASHIER — Sulaymaniyah Branch 1)");
-  console.log("─────────────────────────────────────────");
+  // --- Delivery platform settings (per branch) ---
+  // Suli → Toters (20%), Erbil → Talabat. Admin-editable from the Delivery page;
+  // upsert with empty update so admin changes survive redeploys.
+  for (const branch of BRANCHES) {
+    const def = DEFAULT_DELIVERY[branch];
+    await prisma.deliverySettings.upsert({
+      where: { branch },
+      update: {},
+      create: { branch, ...def },
+    });
+  }
+  console.log("✓ Seeded delivery settings (Suli → Toters, Erbil → Talabat)");
+
+  // --- Per-branch starter data ---
+  for (const branch of BRANCHES) {
+    // Menu
+    const existingCats = await prisma.category.count({ where: { branch } });
+    if (existingCats === 0) {
+      for (let c = 0; c < MENU.length; c++) {
+        const cat = await prisma.category.create({
+          data: { name: MENU[c].category, branch, sortOrder: c },
+        });
+        for (let i = 0; i < MENU[c].items.length; i++) {
+          const it = MENU[c].items[i];
+          await prisma.menuItem.create({
+            data: {
+              name: it.name,
+              price: it.price,
+              description: it.description,
+              modifiers: it.modifiers ?? null,
+              categoryId: cat.id,
+              sortOrder: i,
+            },
+          });
+        }
+      }
+      console.log(`✓ Seeded starter menu (${branch})`);
+    } else {
+      console.log(`• Menu already present (${branch}) — skipped`);
+    }
+
+    // Inventory
+    const existingInv = await prisma.inventoryItem.count({ where: { branch } });
+    if (existingInv === 0) {
+      for (const item of INVENTORY) {
+        await prisma.inventoryItem.create({ data: { ...item, branch } });
+      }
+      console.log(`✓ Seeded inventory (${branch})`);
+    } else {
+      console.log(`• Inventory already present (${branch}) — skipped`);
+    }
+
+    // Inventory categories — idempotent: only create defaults the first time;
+    // never touch admin-renamed ones.
+    const existingCatCount = await prisma.inventoryCategory.count({ where: { branch } });
+    if (existingCatCount === 0) {
+      for (let i = 0; i < DEFAULT_INVENTORY_CATEGORIES.length; i++) {
+        const c = DEFAULT_INVENTORY_CATEGORIES[i];
+        await prisma.inventoryCategory.create({
+          data: { name: c.name, branch, color: c.color, sortOrder: i },
+        });
+      }
+      console.log(`✓ Seeded inventory categories (${branch})`);
+    } else {
+      console.log(`• Inventory categories already present (${branch}) — skipped`);
+    }
+  }
+
+  // Backfill: give any pre-existing order a unique human-facing shortId.
+  const ordersMissingShortId = await prisma.order.findMany({
+    where: { shortId: null },
+    select: { id: true },
+  });
+  for (const o of ordersMissingShortId) {
+    const shortId = await generateUniqueOrderShortId(prisma);
+    await prisma.order.update({ where: { id: o.id }, data: { shortId } });
+  }
+  if (ordersMissingShortId.length)
+    console.log(`✓ Assigned shortId to ${ordersMissingShortId.length} order(s)`);
 }
 
 main()
-  .catch((e) => {
+  .then(() => prisma.$disconnect())
+  .catch(async (e) => {
     console.error(e);
-    process.exit(1);
-  })
-  .finally(async () => {
     await prisma.$disconnect();
+    process.exit(1);
   });

@@ -1,46 +1,66 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
-import { verifyPassword, createSession } from "@/lib/auth";
-import { checkRateLimit, recordFailedAttempt, clearAttempts } from "@/lib/rate-limit";
-import { withApiError, safeJson } from "@/lib/api";
+import { createSession, setSessionCookie } from "@/lib/auth";
+import { audit } from "@/lib/guard";
+import type { Role } from "@/lib/permissions";
+import { checkRateLimit, recordFailure, clearRateLimit, clientIp } from "@/lib/rateLimit";
 
-interface LoginBody {
-  username: string;
-  password: string;
-}
+export async function POST(req: Request) {
+  const { username, password } = await req.json().catch(() => ({}));
+  if (!username || !password) {
+    return NextResponse.json({ error: "Username and password are required" }, { status: 400 });
+  }
 
-export const POST = withApiError(async (req: NextRequest) => {
-  const body = await safeJson<LoginBody>(req);
-  const username = (body.username ?? "").trim().toLowerCase();
-  const password = body.password ?? "";
-
-  const rate = checkRateLimit(username);
-  if (!rate.allowed) {
+  // Brute-force protection: max 5 failed attempts per 15 minutes, keyed by
+  // IP + the attempted username. Check (don't record) up-front and reject early.
+  const uname = String(username).trim().toLowerCase();
+  const rlKey = `${clientIp(req)}:${uname}`;
+  const pre = checkRateLimit(rlKey);
+  if (pre.blocked) {
     return NextResponse.json(
-      { error: "TOO_MANY_ATTEMPTS", retryAfterMinutes: rate.retryAfterMinutes },
-      { status: 429 },
+      { error: "Too many failed attempts. Try again later." },
+      { status: 429, headers: { "Retry-After": String(pre.retryAfterSeconds) } }
     );
   }
 
-  const user = await prisma.user.findUnique({ where: { username } });
+  // Usernames are stored lowercased at creation, so match case-insensitively.
+  const user = await prisma.user.findUnique({ where: { username: uname } });
 
-  if (!user || !user.active || !(await verifyPassword(password, user.passwordHash))) {
-    recordFailedAttempt(username);
-    return NextResponse.json({ error: "INVALID_CREDENTIALS" }, { status: 401 });
-  }
+  // Record the failure (so the NEXT request's up-front check can block once the
+  // limit is reached) and return a normal 401. This allows the full quota of
+  // failed attempts; the (n+1)th request is the one rejected with 429 above.
+  const fail = () => {
+    recordFailure(rlKey);
+    return NextResponse.json(
+      { error: "Invalid credentials or inactive account" },
+      { status: 401 }
+    );
+  };
 
-  clearAttempts(username);
-  await createSession(user.id);
-  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+  if (!user || !user.active) return fail();
 
-  return NextResponse.json({
-    user: {
+  const valid = await bcrypt.compare(String(password), user.password);
+  if (!valid) return fail();
+
+  // Success — clear the counter and issue a fresh DB-backed session.
+  clearRateLimit(rlKey);
+  await prisma.user.update({ where: { id: user.id }, data: { lastLogin: new Date() } });
+
+  const token = await createSession(
+    {
       id: user.id,
       username: user.username,
       fullName: user.fullName,
-      role: user.role,
-      cityId: user.cityId,
-      branchId: user.branchId,
+      role: user.role as Role,
+      branch: user.branch ?? null,
     },
+    { userAgent: req.headers.get("user-agent"), ip: clientIp(req) }
+  );
+  await setSessionCookie(token);
+  await audit(user.id, `Logged in`);
+
+  return NextResponse.json({
+    user: { id: user.id, username: user.username, fullName: user.fullName, role: user.role, branch: user.branch },
   });
-});
+}

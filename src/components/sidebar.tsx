@@ -1,300 +1,283 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import {
   ShoppingCart,
-  ClipboardList,
+  ClipboardCheck,
   UtensilsCrossed,
-  Warehouse,
-  Percent,
-  Factory,
-  TrendingUp,
-  BarChart3,
+  Boxes,
   Receipt,
-  PiggyBank,
-  Wallet,
   CalendarDays,
+  BarChart3,
+  TrendingUp,
+  FileText,
+  Factory,
+  Calculator,
+  Truck,
   Users,
   ShieldCheck,
-  FileText,
+  Wallet,
   LogOut,
-  Moon,
-  Sun,
-  ChevronLeft,
-  ChevronRight,
   Menu as MenuIcon,
   X,
+  Moon,
+  Sun,
   Languages,
 } from "lucide-react";
-import { useLanguage, type DictPath } from "@/i18n";
-import { useTheme } from "@/components/theme-provider";
-import { cn } from "@/lib/cn";
-import type { CurrentUser } from "@/hooks/use-current-user";
-import { canAccess, type ModuleKey } from "@/lib/permissions";
+import clsx from "clsx";
+import { useSession } from "@/lib/session";
+import { apiSend } from "@/lib/client";
+import type { PermissionKey } from "@/lib/permissions";
+import { useLanguage } from "@/lib/i18n/LanguageContext";
+import { ACTIVE_BRANCH_COOKIE, BRANCHES, BRANCH_LABELS, isBranch, type Branch } from "@/lib/branches";
 
-interface NavItem {
-  key: ModuleKey;
+type NavItem = {
   href: string;
-  icon: React.ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
-  labelKey: DictPath;
-}
-
-interface NavGroup {
-  labelKey: DictPath;
-  items: NavItem[];
-}
-
-const NAV_GROUPS: NavGroup[] = [
-  {
-    labelKey: "sidebar.groupOperations",
-    items: [
-      { key: "cashier", href: "/cashier", icon: ShoppingCart, labelKey: "sidebar.cashier" },
-      { key: "dailyNeeds", href: "/daily-needs", icon: ClipboardList, labelKey: "sidebar.dailyNeeds" },
-      { key: "menu", href: "/menu", icon: UtensilsCrossed, labelKey: "sidebar.menu" },
-    ],
-  },
-  {
-    labelKey: "sidebar.groupInventory",
-    items: [
-      { key: "warehouse", href: "/warehouse", icon: Warehouse, labelKey: "sidebar.warehouse" },
-      { key: "ingredientUsage", href: "/ingredient-usage", icon: Percent, labelKey: "sidebar.ingredientUsage" },
-      { key: "production", href: "/production", icon: Factory, labelKey: "sidebar.production" },
-      { key: "estimatedProfit", href: "/estimated-profit", icon: TrendingUp, labelKey: "sidebar.estimatedProfit" },
-    ],
-  },
-  {
-    labelKey: "sidebar.groupFinance",
-    items: [
-      { key: "sales", href: "/sales", icon: BarChart3, labelKey: "sidebar.sales" },
-      { key: "expenses", href: "/expenses", icon: Receipt, labelKey: "sidebar.expenses" },
-      { key: "profit", href: "/profit", icon: PiggyBank, labelKey: "sidebar.profit" },
-      { key: "cashTracking", href: "/cash-tracking", icon: Wallet, labelKey: "sidebar.cashTracking" },
-    ],
-  },
-  {
-    labelKey: "sidebar.groupAdmin",
-    items: [
-      { key: "events", href: "/events", icon: CalendarDays, labelKey: "sidebar.events" },
-      { key: "staff", href: "/staff", icon: Users, labelKey: "sidebar.staff" },
-      { key: "roles", href: "/roles", icon: ShieldCheck, labelKey: "sidebar.roles" },
-      { key: "reports", href: "/reports", icon: FileText, labelKey: "sidebar.reports" },
-    ],
-  },
-];
-
-const ROLE_LABEL: Record<CurrentUser["role"], DictPath> = {
-  ADMIN: "staff.roleAdmin",
-  MANAGER: "staff.roleManager",
-  CASHIER: "staff.roleCashier",
+  label: string;
+  icon: React.ReactNode;
+  // Either gated by a permission key, or admin-only (no permission key needed,
+  // e.g. Cash Tracking which is hard-locked to admins).
+  perm?: PermissionKey;
+  adminOnly?: boolean;
+  badge?: number;
 };
 
-export function Sidebar({ user }: { user: CurrentUser }) {
-  const { t, lang, toggleLang } = useLanguage();
-  const { theme, toggleTheme } = useTheme();
+type NavGroup = { title: string; items: NavItem[] };
+
+export function Sidebar({ lowStockCount, activeBranch }: { lowStockCount?: number; activeBranch?: Branch }) {
+  const { user, can } = useSession();
+  const { lang, setLang, t } = useLanguage();
   const pathname = usePathname();
   const router = useRouter();
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [dark, setDark] = useState(
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark")
+  );
 
-  async function handleSignOut() {
-    await fetch("/api/auth/logout", { method: "POST" });
+  // Lock background scroll while the mobile drawer is open so touch scrolling
+  // stays inside the drawer (and can reach Sign out / Roles at the bottom).
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  const isAdmin = user.role === "admin";
+  // Super admin (no fixed branch) can switch the branch being viewed. The choice
+  // is stored in a plain cookie the server reads on every request.
+  const isSuperAdmin = isAdmin && !isBranch(user.branch);
+
+  function switchBranch(next: Branch) {
+    document.cookie = `${ACTIVE_BRANCH_COOKIE}=${next}; path=/; max-age=${60 * 60 * 24 * 365}; samesite=lax`;
+    setOpen(false);
+    router.refresh();
+    // Full reload so every fetched dataset (menu, queue, analytics…) re-scopes.
+    window.location.reload();
+  }
+
+  // Grouped navigation. Each item is shown only if the user can access it
+  // (permission grant, or admin for admin-only items); groups with no visible
+  // items are dropped entirely.
+  const groups: NavGroup[] = (
+    [
+      {
+        title: t("nav.groupOperations"),
+        items: [
+          { href: "/pos", label: t("nav.cashier"), icon: <ShoppingCart size={20} />, perm: "pos.use" },
+          { href: "/daily-needs", label: t("nav.dailyNeeds"), icon: <ClipboardCheck size={20} />, perm: "daily.view" },
+          { href: "/menu", label: t("nav.menu"), icon: <UtensilsCrossed size={20} />, perm: "menu.manage" },
+          { href: "/events", label: "Events", icon: <CalendarDays size={20} />, perm: "events.manage" },
+        ],
+      },
+      {
+        title: t("nav.groupInventoryProduction"),
+        items: [
+          {
+            href: "/inventory",
+            label: t("nav.warehouse"),
+            icon: <Boxes size={20} />,
+            perm: "inventory.manage",
+            badge: lowStockCount,
+          },
+          { href: "/production", label: "Production", icon: <Factory size={20} />, perm: "recipes.manage" },
+        ],
+      },
+      {
+        title: t("nav.groupFinance"),
+        items: [
+          { href: "/analytics", label: t("nav.sales"), icon: <BarChart3 size={20} />, perm: "analytics.view" },
+          { href: "/cash-tracking", label: "Cash Tracking", icon: <Wallet size={20} />, adminOnly: true },
+          { href: "/expenses", label: t("nav.expenses"), icon: <Receipt size={20} />, perm: "expenses.manage" },
+          { href: "/profit", label: "Profit", icon: <TrendingUp size={20} />, perm: "profit.view" },
+          { href: "/estimated", label: "Est. Profit", icon: <Calculator size={20} />, perm: "estimated.view" },
+          { href: "/reports", label: "Reports", icon: <FileText size={20} />, perm: "reports.view" },
+          { href: "/delivery", label: "Delivery", icon: <Truck size={20} />, perm: "delivery.view" },
+        ],
+      },
+      {
+        title: "Admin",
+        items: [
+          { href: "/staff", label: "Staff", icon: <Users size={20} />, perm: "staff.manage" },
+          { href: "/permissions", label: "Roles", icon: <ShieldCheck size={20} />, perm: "permissions.manage" },
+        ],
+      },
+    ] as NavGroup[]
+  )
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((n) => (n.adminOnly ? isAdmin : n.perm ? can(n.perm) : false)),
+    }))
+    .filter((g) => g.items.length > 0);
+
+  function toggleTheme() {
+    const root = document.documentElement;
+    const next = !root.classList.contains("dark");
+    root.classList.toggle("dark", next);
+    localStorage.theme = next ? "dark" : "light";
+    setDark(next);
+  }
+
+  async function logout() {
+    await apiSend("/api/auth/logout", "POST");
     router.push("/login");
     router.refresh();
   }
 
-  const ChevronCollapse = lang === "ku" ? ChevronRight : ChevronLeft;
-  const ChevronExpand = lang === "ku" ? ChevronLeft : ChevronRight;
+  const NavLinks = () => (
+    <nav className="flex flex-col gap-3">
+      {groups.map((group) => (
+        <div key={group.title} className="flex flex-col gap-1">
+          <p className="px-3 pt-1 pb-0.5 text-[11px] font-bold uppercase tracking-wider opacity-40">
+            {group.title}
+          </p>
+          {group.items.map((item) => {
+            const active = pathname === item.href || pathname.startsWith(item.href + "/");
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setOpen(false)}
+                className={clsx(
+                  "flex items-center gap-3 rounded-xl px-3 py-2.5 font-bold transition",
+                  active
+                    ? "bg-corn text-white"
+                    : "text-[var(--text)]/80 hover:bg-black/5 dark:hover:bg-white/10"
+                )}
+              >
+                {item.icon}
+                <span className="flex-1">{item.label}</span>
+                {!!item.badge && item.badge > 0 && (
+                  <span className="chip bg-red-500 text-white">{item.badge}</span>
+                )}
+              </Link>
+            );
+          })}
+        </div>
+      ))}
+    </nav>
+  );
 
-  const scopeLabel =
-    user.role === "ADMIN"
-      ? null
-      : user.branchName
-        ? `${lang === "ku" ? user.cityNameKu : user.cityName} — ${lang === "ku" ? user.branchNameKu : user.branchName}`
-        : lang === "ku"
-          ? user.cityNameKu
-          : user.cityName;
-
-  const content = (
-    <div className="flex h-full flex-col">
-      {/* Brand header */}
-      <div
-        className={cn(
-          "flex items-center gap-2.5 px-4 shrink-0 border-b border-[var(--sidebar-border)]",
-          collapsed ? "h-14 justify-center px-2" : "h-14",
-        )}
-      >
-        <Link href="/dashboard" className="flex items-center gap-2.5 overflow-hidden min-w-0">
-          <div className="h-9 w-9 shrink-0 rounded-xl bg-shklet-red flex items-center justify-center shadow-[0_4px_14px_-4px_rgba(239,51,64,0.6)]">
-            <span className="text-white font-black text-base">S</span>
-          </div>
-          {!collapsed && (
-            <div className="min-w-0">
-              <p className="font-extrabold text-[15px] tracking-[-0.01em] text-[var(--sidebar-text)] leading-tight truncate">
-                Shklet
-              </p>
-              <p className="text-[11px] text-[var(--sidebar-text-muted)] leading-tight truncate">
-                {t(ROLE_LABEL[user.role])}
-              </p>
-            </div>
-          )}
-        </Link>
-        <button
-          onClick={() => setMobileOpen(false)}
-          className="lg:hidden ms-auto p-1.5 rounded-lg hover:bg-white/10 text-[var(--sidebar-text)]"
-        >
-          <X size={18} />
-        </button>
+  const Inner = () => (
+    <div className="flex flex-col min-h-full">
+      <div className="flex flex-col items-center gap-2 px-2 py-2 mb-2">
+        <Image
+          src="/brand/logo_icon.png"
+          alt="Shklet"
+          width={160}
+          height={160}
+          priority
+          className="w-24 h-auto"
+        />
+        <Image src="/brand/logo_text.png" alt="Shklet" width={140} height={40} className="h-7 w-auto" />
       </div>
 
-      {/* Scope badge */}
-      {!collapsed && scopeLabel && (
-        <div className="px-4 pt-2.5 pb-0.5 shrink-0">
-          <div className="rounded-lg bg-white/[0.06] px-3 py-1.5 text-[11.5px] text-[var(--sidebar-text-muted)] font-medium truncate border border-white/[0.05]">
-            {scopeLabel}
+      {/* Branch indicator / switcher */}
+      <div className="mb-4">
+        {isSuperAdmin ? (
+          <div className="grid grid-cols-2 gap-1 rounded-xl bg-black/5 dark:bg-white/10 p-1">
+            {BRANCHES.map((b) => (
+              <button
+                key={b}
+                onClick={() => activeBranch !== b && switchBranch(b)}
+                className={clsx(
+                  "rounded-lg px-2 py-1.5 text-xs font-bold transition",
+                  activeBranch === b ? "bg-corn text-white" : "opacity-60 hover:opacity-100"
+                )}
+              >
+                {BRANCH_LABELS[b]}
+              </button>
+            ))}
           </div>
+        ) : (
+          isBranch(user.branch) && (
+            <p className="text-center text-xs font-bold uppercase tracking-wider opacity-50">
+              {BRANCH_LABELS[user.branch]}
+            </p>
+          )
+        )}
+      </div>
+
+      <NavLinks />
+
+      <div className="mt-auto pt-4 flex flex-col gap-1">
+        <button
+          onClick={() => setLang(lang === "en" ? "ku" : "en")}
+          className="btn-ghost px-3 py-2.5 justify-start font-bold"
+        >
+          <Languages size={20} />
+          {lang === "en" ? "کوردی" : "English"}
+        </button>
+        <button onClick={toggleTheme} className="btn-ghost px-3 py-2.5 justify-start font-bold">
+          {dark ? <Sun size={20} /> : <Moon size={20} />}
+          {dark ? t("nav.lightMode") : t("nav.darkMode")}
+        </button>
+        <div className="rounded-xl px-3 py-2.5 bg-black/5 dark:bg-white/5">
+          <p className="font-bold text-sm truncate">{user.fullName}</p>
+          <p className="text-xs opacity-60 capitalize">{user.role}</p>
         </div>
-      )}
-
-      {/* Nav */}
-      <nav className="flex-1 overflow-y-auto py-2.5 px-2.5 space-y-2 sidebar-scroll">
-        {NAV_GROUPS.map((group) => {
-          const items = group.items.filter((item) => canAccess(user.role, item.key));
-          if (items.length === 0) return null;
-          return (
-            <div key={group.labelKey}>
-              {!collapsed && (
-                <div className="px-2.5 text-[10.5px] font-bold uppercase tracking-wider text-[var(--sidebar-text-muted)]/70 mb-1">
-                  {t(group.labelKey)}
-                </div>
-              )}
-              <div className="space-y-0.5">
-                {items.map((item) => {
-                  const active = pathname?.startsWith(item.href);
-                  const Icon = item.icon;
-                  return (
-                    <Link
-                      key={item.key}
-                      href={item.href}
-                      onClick={() => setMobileOpen(false)}
-                      className={cn(
-                        "group relative flex items-center gap-3 rounded-xl px-2.5 py-2 text-[13.5px] font-semibold transition-all duration-150",
-                        active
-                          ? "bg-shklet-red text-white shadow-[0_4px_14px_-4px_rgba(239,51,64,0.55)]"
-                          : "text-[var(--sidebar-text-muted)] hover:bg-white/[0.06] hover:text-[var(--sidebar-text)]",
-                        collapsed && "justify-center px-0",
-                      )}
-                      title={collapsed ? t(item.labelKey) : undefined}
-                    >
-                      <Icon size={17} strokeWidth={2} className="shrink-0" />
-                      {!collapsed && <span className="truncate">{t(item.labelKey)}</span>}
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </nav>
-
-      {/* Footer controls */}
-      <div className="border-t border-[var(--sidebar-border)] p-2 space-y-0.5 shrink-0">
-        <button
-          onClick={toggleLang}
-          className={cn(
-            "w-full flex items-center gap-3 rounded-xl px-2.5 py-2 text-[13px] font-semibold text-[var(--sidebar-text-muted)] hover:bg-white/[0.06] hover:text-[var(--sidebar-text)] transition-colors",
-            collapsed && "justify-center px-0",
-          )}
-        >
-          <Languages size={17} className="shrink-0" />
-          {!collapsed && <span>{lang === "en" ? "کوردی" : "English"}</span>}
+        <button onClick={logout} className="btn-ghost px-3 py-2.5 justify-start font-bold text-red-500">
+          <LogOut size={20} />
+          {t("nav.signOut")}
         </button>
-        <button
-          onClick={toggleTheme}
-          className={cn(
-            "w-full flex items-center gap-3 rounded-xl px-2.5 py-2 text-[13px] font-semibold text-[var(--sidebar-text-muted)] hover:bg-white/[0.06] hover:text-[var(--sidebar-text)] transition-colors",
-            collapsed && "justify-center px-0",
-          )}
-        >
-          {theme === "light" ? <Moon size={17} className="shrink-0" /> : <Sun size={17} className="shrink-0" />}
-          {!collapsed && <span>{theme === "light" ? t("common.darkMode") : t("common.lightMode")}</span>}
-        </button>
-        <button
-          onClick={handleSignOut}
-          className={cn(
-            "w-full flex items-center gap-3 rounded-xl px-2.5 py-2 text-[13px] font-semibold text-shklet-red/90 hover:bg-shklet-red/10 hover:text-shklet-red transition-colors",
-            collapsed && "justify-center px-0",
-          )}
-        >
-          <LogOut size={17} className="shrink-0" />
-          {!collapsed && <span>{t("sidebar.signOut")}</span>}
-        </button>
-
-        <div className="pt-1 mt-1 border-t border-[var(--sidebar-border)] flex items-center gap-2.5 px-2.5">
-          <div className="h-7 w-7 shrink-0 rounded-full bg-white/10 flex items-center justify-center text-[var(--sidebar-text)] text-[11px] font-bold">
-            {user.fullName.slice(0, 1).toUpperCase()}
-          </div>
-          {!collapsed && (
-            <p className="text-[12px] font-semibold text-[var(--sidebar-text)] truncate">{user.fullName}</p>
-          )}
-          <button
-            onClick={() => setCollapsed((c) => !c)}
-            className="hidden lg:flex ms-auto h-7 w-7 items-center justify-center rounded-lg text-[var(--sidebar-text-muted)] hover:bg-white/10 hover:text-[var(--sidebar-text)] transition-colors"
-          >
-            {collapsed ? <ChevronExpand size={15} /> : <ChevronCollapse size={15} />}
-          </button>
-        </div>
       </div>
     </div>
   );
 
   return (
     <>
-      {/* Mobile top bar trigger */}
-      <div className="lg:hidden fixed top-0 inset-x-0 z-40 flex items-center justify-between bg-[var(--card)]/90 backdrop-blur-md border-b border-[var(--card-border)] px-4 h-14">
-        <button onClick={() => setMobileOpen(true)} className="p-1.5 -ms-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10">
+      {/* Mobile top bar */}
+      <header className="lg:hidden sticky top-0 z-30 flex items-center justify-between px-4 h-14 bg-[var(--surface)] border-b border-black/5 dark:border-white/5">
+        <Image src="/brand/logo_icon.png" alt="Shklet" width={48} height={48} className="size-10" />
+        <button onClick={() => setOpen(true)} className="btn-ghost size-10 rounded-xl">
           <MenuIcon size={22} />
         </button>
-        <span className="font-extrabold tracking-[-0.01em]">Shklet</span>
-        <div className="w-8" />
-      </div>
-
-      {/* Desktop sidebar */}
-      <aside
-        className={cn(
-          "hidden lg:flex flex-col shrink-0 h-screen sticky top-0 transition-[width] duration-200 ease-out",
-          collapsed ? "w-[76px]" : "w-64",
-        )}
-        style={{ background: "var(--sidebar-bg)" }}
-      >
-        {content}
-      </aside>
+      </header>
 
       {/* Mobile drawer */}
-      <AnimatePresence>
-        {mobileOpen && (
-          <motion.div
-            className="lg:hidden fixed inset-0 z-50 flex"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+      {open && (
+        <div className="lg:hidden fixed inset-0 z-40 bg-black/40" onClick={() => setOpen(false)}>
+          <aside
+            className="absolute left-0 top-0 bottom-0 w-72 bg-[var(--surface)] p-4 overflow-y-auto overscroll-contain"
+            onClick={(e) => e.stopPropagation()}
           >
-            <motion.div
-              className="w-72 max-w-[80vw] h-full shadow-2xl"
-              style={{ background: "var(--sidebar-bg)" }}
-              initial={{ x: lang === "ku" ? 320 : -320 }}
-              animate={{ x: 0 }}
-              exit={{ x: lang === "ku" ? 320 : -320 }}
-              transition={{ duration: 0.22, ease: [0.25, 1, 0.5, 1] }}
-            >
-              {content}
-            </motion.div>
-            <div className="flex-1 bg-black/50" onClick={() => setMobileOpen(false)} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+            <button onClick={() => setOpen(false)} className="btn-ghost size-9 min-h-0 rounded-full mb-2 ml-auto block">
+              <X size={18} />
+            </button>
+            <Inner />
+          </aside>
+        </div>
+      )}
+
+      {/* Desktop sidebar */}
+      <aside className="hidden lg:flex flex-col w-64 shrink-0 p-4 bg-[var(--surface)] border-r border-black/5 dark:border-white/5 h-screen sticky top-0 overflow-y-auto">
+        <Inner />
+      </aside>
     </>
   );
 }

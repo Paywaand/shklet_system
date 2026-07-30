@@ -1,66 +1,25 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireUser, scopeCityFilter, logAudit, AuthError } from "@/lib/auth";
-import { withApiError, safeJson } from "@/lib/api";
+import { authorize } from "@/lib/guard";
+import { DailyNeedsItemsSchema } from "@/lib/schemas";
+import { activeBranch } from "@/lib/branchScope";
 
-/**
- * Daily Needs is reachable by cashier + manager + admin (module 14: "cashier
- * (Cashier + Daily Needs only)"). Cashiers use their branch's city.
- */
-async function resolveCityId(user: Awaited<ReturnType<typeof requireUser>>, requestedCityId?: string | null) {
-  if (user.role === "ADMIN") return requestedCityId ?? null;
-  if (user.role === "MANAGER") return user.cityId;
-  if (user.role === "CASHIER" && user.branchId) {
-    const branch = await prisma.branch.findUnique({ where: { id: user.branchId } });
-    return branch?.cityId ?? null;
-  }
-  return null;
+// POST /api/daily-needs — optional persistence of a completed checklist.
+// Accessible to every role that can view Daily Needs (incl. cashiers).
+export async function POST(req: Request) {
+  const guard = await authorize("daily.view");
+  if (!guard.ok) return guard.response;
+  const branch = await activeBranch(guard.session);
+
+  const body = await req.json().catch(() => ({}));
+  // Strict validation before the list is JSON-stringified into the DB (bounds the
+  // item count + string sizes — see lib/schemas.ts).
+  const parsed = DailyNeedsItemsSchema.safeParse(body.items);
+  if (!parsed.success || parsed.data.length === 0)
+    return NextResponse.json({ error: "Nothing to save" }, { status: 400 });
+
+  const log = await prisma.dailyNeedsLog.create({
+    data: { createdById: guard.session.sub, branch, items: JSON.stringify(parsed.data) },
+  });
+  return NextResponse.json({ id: log.id }, { status: 201 });
 }
-
-export const GET = withApiError(async (req: NextRequest) => {
-  const user = await requireUser();
-  const { searchParams } = new URL(req.url);
-  const cityId = await resolveCityId(user, searchParams.get("cityId"));
-  if (!cityId) throw new AuthError("No city context", 400);
-
-  const items = await prisma.inventoryItem.findMany({
-    where: { cityId },
-    include: { category: true },
-    orderBy: { name: "asc" },
-  });
-
-  const latestChecklist = await prisma.dailyNeedsChecklist.findFirst({
-    where: { cityId },
-    orderBy: { businessDate: "desc" },
-    include: { entries: true },
-  });
-
-  return NextResponse.json({ items, latestChecklist });
-});
-
-interface SaveChecklistBody {
-  entries: { inventoryItemId: string; needsRestock: boolean; note?: string }[];
-}
-
-export const POST = withApiError(async (req: NextRequest) => {
-  const user = await requireUser();
-  const cityId = await resolveCityId(user);
-  if (!cityId) throw new AuthError("No city context", 400);
-
-  const body = await safeJson<SaveChecklistBody>(req);
-  const businessDate = new Date();
-  businessDate.setHours(0, 0, 0, 0);
-
-  const checklist = await prisma.dailyNeedsChecklist.create({
-    data: {
-      cityId,
-      businessDate,
-      completedBy: user.id,
-      entries: { create: body.entries },
-    },
-    include: { entries: true },
-  });
-
-  await logAudit(user.id, "saved a daily needs checklist", "DailyNeedsChecklist", checklist.id);
-  return NextResponse.json({ checklist });
-});

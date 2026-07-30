@@ -1,7 +1,3 @@
-// Shklet Kiosk — Sales & Management System
-// Prisma schema — PostgreSQL
-// See /docs or README.md for the module-by-module rationale.
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,576 +7,434 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Enums
-// ─────────────────────────────────────────────────────────────────────────
+// ============================================================================
+// Shklet — POS & Management System
+//
+// BRANCHES: the business runs two fully separated branches — "suli"
+// (Sulaymaniyah) and "erbil" (Erbil). Every operational table carries a
+// `branch` column and every query is scoped to exactly one branch. Managers &
+// cashiers belong to ONE branch (User.branch); the super admin (User.branch =
+// null) can switch between branches from the sidebar but still always views
+// ONE branch at a time.
+//
+// DELIVERY: each branch has its own delivery platform (Toters in Suli,
+// Talabat in Erbil) with its own commission percentage, configured per-branch
+// in DeliverySettings and snapshotted onto each DeliveryOrder.
+// ============================================================================
 
-enum Role {
-  ADMIN
-  MANAGER
-  CASHIER
-}
-
-enum OrderType {
-  WALKIN
-  DELIVERY
-}
-
-enum OrderStatus {
-  PLACED
-  READY
-  DRIVER_ARRIVED
-  COLLECTED
-  CANCELLED
-}
-
-enum PaymentMethod {
-  CASH
-  CARD
-  PLATFORM
-}
-
-enum StockMovementType {
-  ADD
-  REMOVE
-}
-
-enum StockMovementReason {
-  DELIVERY
-  DAILY_USAGE
-  WASTAGE
-  MANUAL_CORRECTION
-  OTHER
-}
-
-enum RecipeSourceType {
-  WAREHOUSE_ITEM
-  BATCH
-  MANUAL
-}
-
-enum ExpenseCategory {
-  RENT
-  UTILITIES
-  SUPPLIES
-  STAFF
-  OTHER
-}
-
-enum EventStatus {
-  ACTIVE
-  CLOSED
-}
-
-enum CashSource {
-  SAFE
-  MANAGER
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Cities & Branches (module 0)
-// ─────────────────────────────────────────────────────────────────────────
-
-model City {
-  id        String   @id @default(cuid())
-  name      String // English name, e.g. "Sulaymaniyah"
-  nameKu    String // Kurdish name, e.g. "سلێمانی"
-  slug      String   @unique // "sulaymaniyah" | "erbil"
-  createdAt DateTime @default(now())
-
-  branches             Branch[]
-  users                User[]
-  menuItemPrices       MenuItemCityPrice[]
-  inventoryCategories  InventoryCategory[]
-  inventoryItems       InventoryItem[]
-  dailyNeedsChecklists DailyNeedsChecklist[]
-  expenses             Expense[]
-  safeDeposits         SafeDeposit[]
-  withdrawals          Withdrawal[]
-  dispatches           Dispatch[]
-}
-
-model Branch {
-  id              String   @id @default(cuid())
-  cityId          String
-  city            City     @relation(fields: [cityId], references: [id])
-  name            String // English, e.g. "Branch 1"
-  nameKu          String
-  pagerRangeStart Int      @default(1)
-  pagerRangeEnd   Int      @default(30)
-  createdAt       DateTime @default(now())
-
-  users  User[]
-  orders Order[]
-
-  @@index([cityId])
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Auth / Staff (modules 13, 14)
-// ─────────────────────────────────────────────────────────────────────────
-
+// ----------------------- Staff / Auth -----------------------
 model User {
-  id            String    @id @default(cuid())
-  username      String    @unique
-  passwordHash  String
-  fullName      String
-  role          Role
-  active        Boolean   @default(true)
-  cityId        String? // required when role = MANAGER
-  city          City?     @relation(fields: [cityId], references: [id])
-  branchId      String? // required when role = CASHIER
-  branch        Branch?   @relation(fields: [branchId], references: [id])
-  monthlySalary Int? // admin-only field, stripped from API for non-admins
-  lastLoginAt   DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id        String    @id @default(cuid())
+  username  String    @unique
+  password  String // bcrypt hash
+  fullName  String
+  role      String    @default("cashier") // admin | manager | cashier
+  // Branch this account belongs to: "suli" | "erbil". NULL = super admin
+  // (all branches). Managers/cashiers MUST have a branch; every API call they
+  // make is hard-scoped to it server-side.
+  branch    String?
+  active    Boolean   @default(true)
+  salary    Int? // monthly salary in IQD (admin-visible only)
+  createdAt DateTime  @default(now())
+  lastLogin DateTime?
 
-  sessions             Session[]
-  auditLogs            AuditLog[]
-  orders               Order[]
-  stockMovements       StockMovement[]
-  expenses             Expense[]
-  safeDeposits         SafeDeposit[]
-  withdrawals          Withdrawal[]
-  batchProductions     BatchProduction[]
-  dispatches           Dispatch[]
-  dailyNeedsChecklists DailyNeedsChecklist[]
-
-  @@index([cityId])
-  @@index([branchId])
+  orders          Order[]
+  stockMovements  StockMovement[]
+  auditLogs       AuditLog[]
+  expenses        Expense[]
+  deliveryOrders  DeliveryOrder[]
+  dailyNeedsLogs  DailyNeedsLog[]
+  safeEntries     SafeEntry[]
+  withdrawals     CashWithdrawal[]
+  cashAdjustments CashAdjustment[]
+  sessions        Session[]
 }
 
+// ----------------------- Server-side sessions -----------------------
+// DB-backed login sessions. The auth cookie is a short JWT carrying this row's
+// `id` (sid); every request validates that the row still exists and hasn't
+// expired, so deleting a row (logout / admin revoke / deactivation) kills the
+// session immediately — no more "zombie" 7-day stateless JWTs.
 model Session {
   id        String   @id @default(cuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
-  revoked   Boolean  @default(false)
   createdAt DateTime @default(now())
+  userAgent String?
+  ip        String?
 
   @@index([userId])
+  @@index([expiresAt])
 }
 
-model AuditLog {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id])
-  action     String // human readable, e.g. "placed order #A3F9K"
-  entityType String? // e.g. "Order", "MenuItem"
-  entityId   String?
-  createdAt  DateTime @default(now())
-
-  @@index([createdAt])
-}
-
-model RolePermission {
-  id      String  @id @default(cuid())
-  role    Role
-  permKey String // e.g. "cashier.access", "warehouse.access"
-  allowed Boolean @default(true)
-
-  @@unique([role, permKey])
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Menu Management (module 2)
-// ─────────────────────────────────────────────────────────────────────────
-
+// ----------------------- Menu -----------------------
+// Each branch has its OWN menu (categories + items are per-branch).
 model Category {
-  id        String   @id @default(cuid())
+  id        String     @id @default(cuid())
   name      String
-  nameKu    String
-  sortOrder Int      @default(0)
-  createdAt DateTime @default(now())
+  branch    String     @default("suli") // "suli" | "erbil"
+  sortOrder Int        @default(0)
+  items     MenuItem[]
 
-  items MenuItem[]
+  @@index([branch])
 }
 
 model MenuItem {
   id          String   @id @default(cuid())
-  categoryId  String
-  category    Category @relation(fields: [categoryId], references: [id])
   name        String
-  nameKu      String
+  price       Int // stored as whole IQD
   description String?
   imageUrl    String?
-  basePrice   Int // fallback price if no per-city override exists
+  available   Boolean  @default(true)
   sortOrder   Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  cityPrices     MenuItemCityPrice[]
-  modifierGroups ModifierGroup[]
-  orderItems     OrderItem[]
-  recipe         Recipe?
-
-  @@index([categoryId])
+  modifiers   String? // JSON-encoded array of modifier groups: [{name, required, options:[]}]
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  recipe      Recipe? // optional BOM (one recipe per sellable item)
 }
 
-// Per-city price + availability override (module 0 / 2)
-model MenuItemCityPrice {
-  id         String   @id @default(cuid())
-  menuItemId String
-  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
-  cityId     String
-  city       City     @relation(fields: [cityId], references: [id])
-  price      Int
-  available  Boolean  @default(true)
-
-  @@unique([menuItemId, cityId])
-  @@index([cityId])
-}
-
-model ModifierGroup {
-  id         String   @id @default(cuid())
-  menuItemId String
-  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
-  name       String
-  nameKu     String
-  required   Boolean  @default(false)
-  sortOrder  Int      @default(0)
-
-  options ModifierOption[]
-}
-
-model ModifierOption {
-  id         String        @id @default(cuid())
-  groupId    String
-  group      ModifierGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  name       String
-  nameKu     String
-  extraPrice Int           @default(0)
-  sortOrder  Int           @default(0)
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Cashier / POS + Active Orders (module 1)
-// ─────────────────────────────────────────────────────────────────────────
-
+// ----------------------- Orders -----------------------
 model Order {
-  id            String        @id @default(cuid())
-  code          String        @unique // short human-facing code, e.g. "7K4QP"
-  branchId      String
-  branch        Branch        @relation(fields: [branchId], references: [id])
-  cashierId     String
-  cashier       User          @relation(fields: [cashierId], references: [id])
-  type          OrderType     @default(WALKIN)
-  status        OrderStatus   @default(PLACED)
-  pagerNumber   Int? // null for delivery orders
-  paymentMethod PaymentMethod @default(CASH)
-
-  subtotal Int
-  total    Int
-
-  // Delivery-specific fields (kept out of main sales aggregates)
-  deliveryReference     String?
-  deliveryCommissionPct Float?
-  deliveryGross         Int?
-  deliveryNet           Int?
-
-  eventId String?
-  event   Event?  @relation(fields: [eventId], references: [id])
-
-  placedAt        DateTime  @default(now())
+  id              String      @id @default(cuid())
+  // Human-facing order code: random 5-char uppercase alphanumeric (no ambiguous
+  // 0/O/1/I). Generated + collision-checked at creation. The cuid `id` stays the
+  // FK; `shortId` is what's shown on receipts, history, the queue, and dialogs.
+  shortId         String?     @unique
+  // Client-generated UUID for offline idempotency. The cashier tablet generates this
+  // when an order is created (online or queued offline) and sends it with POST. If a
+  // retry arrives after the row already exists (network dropped before the response),
+  // the server returns the existing order instead of creating a duplicate.
+  clientId        String?     @unique
+  branch          String      @default("suli") // "suli" | "erbil"
+  pagerNumber     Int
+  total           Int
+  paymentMethod   String // cash | card
+  orderType       String      @default("walk_in") // walk_in | takeaway — NOT delivery; platform orders stay in DeliveryOrder
+  isPaid          Boolean     @default(true) // false = paid later; not used by DeliveryOrder
+  status          String      @default("pending") // pending | ready | collected
+  placedAt        DateTime    @default(now())
   readyAt         DateTime?
-  driverArrivedAt DateTime?
   collectedAt     DateTime?
-  cancelledAt     DateTime?
+  durationSeconds Int?
+  staffId         String?
+  staff           User?       @relation(fields: [staffId], references: [id])
+  eventId         String? // null = the branch itself (no event)
+  event           Event?      @relation(fields: [eventId], references: [id])
+  items           OrderItem[]
 
-  offlineCreated Boolean @default(false) // was this queued offline then synced?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  items OrderItem[]
-
-  @@index([branchId, status])
   @@index([placedAt])
+  @@index([status])
   @@index([eventId])
+  @@index([branch])
 }
 
 model OrderItem {
-  id             String    @id @default(cuid())
-  orderId        String
-  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  menuItemId     String?
-  menuItem       MenuItem? @relation(fields: [menuItemId], references: [id])
-  nameSnapshot   String // frozen at order time (English)
-  nameKuSnapshot String // frozen at order time (Kurdish)
-  unitPrice      Int
-  quantity       Int       @default(1)
-  lineTotal      Int
+  id       String  @id @default(cuid())
+  orderId  String
+  order    Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  name     String // snapshot of item name at time of sale
+  price    Int // snapshot of unit price
+  quantity Int
+  modifier String? // snapshot of chosen modifiers
 
-  modifiers OrderItemModifier[]
-
-  @@index([orderId])
+  @@index([orderId]) // FK used by `include: { items: true }`; without it every analytics load full-scans OrderItem
+  @@index([name])
 }
 
-model OrderItemModifier {
-  id          String    @id @default(cuid())
-  orderItemId String
-  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
-  groupName   String
-  optionName  String
-  extraPrice  Int       @default(0)
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Warehouse / Inventory (module 3) + Daily Needs (module 4)
-// ─────────────────────────────────────────────────────────────────────────
-
-model InventoryCategory {
-  id     String @id @default(cuid())
-  cityId String
-  city   City   @relation(fields: [cityId], references: [id])
-  name   String
-  nameKu String
-  color  String @default("#AA8066")
-
-  items InventoryItem[]
-
-  @@index([cityId])
-}
-
+// ----------------------- Inventory / Warehouse -----------------------
+// Each branch has its OWN warehouse: items, categories, and movements are all
+// per-branch (movements inherit the branch through their item).
 model InventoryItem {
-  id            String             @id @default(cuid())
-  cityId        String
-  city          City               @relation(fields: [cityId], references: [id])
-  categoryId    String?
-  category      InventoryCategory? @relation(fields: [categoryId], references: [id])
-  name          String
-  nameKu        String
-  unit          String // kg | g | litre | ml | piece | box | ...
-  quantity      Decimal            @default(0) @db.Decimal(12, 3)
-  minThreshold  Decimal            @default(0) @db.Decimal(12, 3)
-  unitCost      Decimal            @default(0) @db.Decimal(12, 2) // latest derived unit cost
-  subUnitFactor Decimal?           @db.Decimal(12, 3) // e.g. 6 units per box
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
-
+  id                String             @id @default(cuid())
+  name              String
+  branch            String             @default("suli") // "suli" | "erbil"
+  unit              String // kg | g | litre | piece | box
+  quantity          Float              @default(0)
+  minThreshold      Float              @default(0)
+  lastUnitCost      Float? // most recent purchase unit cost (IQD per unit)
+  // For raw ingredients bought in containers: how much (in `unit`) one purchased
+  // container holds, e.g. a 1-litre bottle tracked in ml → unitSize 1000.
+  // `quantity` stays the fine-grained running total; units in stock = quantity / unitSize.
+  unitSize          Float? // null = tracked directly, no container concept
+  // Sub-unit layer inside a container (both optional). When both are set the system
+  // can derive cost-per-smallest-unit:
+  //   totalContentPerContainer = unitsPerContainer × contentPerUnit
+  //   costPerSmallestUnit      = lastUnitCost / totalContentPerContainer
+  unitsPerContainer Float? // how many sub-units are inside one container (e.g. 6 cans per box)
+  contentPerUnit    Float? // how much of `unit` each sub-unit holds (e.g. 1850 g per can)
+  // Optional warehouse category. Deleting the category nulls this so items fall
+  // back to "Uncategorized".
+  categoryId        String?
+  category          InventoryCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   movements         StockMovement[]
-  recipeLines       RecipeLine[]
-  batchIngredients  BatchIngredient[]
-  dailyNeedsEntries DailyNeedsEntry[]
+  recipeLines       RecipeIngredient[] // BOM lines that derive cost from this raw item
 
-  @@index([cityId])
-  @@index([categoryId])
+  @@index([branch])
+}
+
+// Custom warehouse categories, per-branch. `color` is a token mapped to badge
+// classes client-side (gray | red | amber | green | blue | purple | pink | teal).
+model InventoryCategory {
+  id        String          @id @default(cuid())
+  name      String
+  branch    String          @default("suli") // "suli" | "erbil"
+  color     String          @default("gray")
+  sortOrder Int             @default(0)
+  createdAt DateTime        @default(now())
+  items     InventoryItem[]
+
+  @@unique([branch, name])
+  @@index([branch])
 }
 
 model StockMovement {
-  id             String              @id @default(cuid())
-  itemId         String
-  item           InventoryItem       @relation(fields: [itemId], references: [id])
-  type           StockMovementType
-  amount         Decimal             @db.Decimal(12, 3)
-  totalCost      Int? // only for ADD movements (delivery cost)
-  unitCostAtTime Decimal             @db.Decimal(12, 2)
-  reason         StockMovementReason
-  note           String?
-  eventId        String?
-  event          Event?              @relation(fields: [eventId], references: [id])
-  userId         String
-  user           User                @relation(fields: [userId], references: [id])
-  edited         Boolean             @default(false)
-  createdAt      DateTime            @default(now())
+  id        String        @id @default(cuid())
+  itemId    String
+  item      InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  change    Float // positive = added, negative = removed
+  reason    String // delivery | daily_usage | wastage | correction | other
+  note      String?
+  unitCost  Float? // IQD per unit for this movement
+  totalCost Float? // IQD total for this movement (additions: batch cost; deductions: usage cost as negative)
+  staffId   String?
+  staff     User?         @relation(fields: [staffId], references: [id])
+  eventId   String? // destination of usage: null = the branch itself
+  event     Event?        @relation(fields: [eventId], references: [id])
+  createdAt DateTime      @default(now())
+  editedAt  DateTime? // set when a movement is edited after creation (shows an "edited" indicator)
 
-  @@index([itemId])
+  @@index([createdAt])
   @@index([eventId])
 }
 
-model DailyNeedsChecklist {
-  id              String   @id @default(cuid())
-  cityId          String
-  city            City     @relation(fields: [cityId], references: [id])
-  businessDate    DateTime
-  completedBy     String
-  completedByUser User     @relation(fields: [completedBy], references: [id])
-  createdAt       DateTime @default(now())
+// ----------------------- Expenses -----------------------
+model Expense {
+  id          String   @id @default(cuid())
+  date        DateTime @default(now())
+  branch      String   @default("suli") // "suli" | "erbil"
+  category    String // Rent | Utilities | Supplies | Staff | Other
+  description String?
+  amount      Int // IQD
+  // Where the cash came from: "manager" (default) or "safe". Admin-only choice on
+  // the expense form; safe-sourced expenses draw down the safe balance.
+  source      String   @default("manager")
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+  eventId     String? // "Linked to": null = the branch itself
+  event       Event?   @relation(fields: [eventId], references: [id])
+  createdAt   DateTime @default(now())
 
-  entries DailyNeedsEntry[]
-
-  @@index([cityId, businessDate])
+  @@index([date])
+  @@index([eventId])
+  @@index([branch])
 }
 
-model DailyNeedsEntry {
+// ----------------------- Cash tracking (admin-only, per-branch) -----------------------
+// Admin moves cash into the branch safe; each deposit is automatically taken from
+// that branch manager's wallet. Used by the Sales page "Cash Tracking" section
+// (admin-only) to reconcile where physical cash is at any time.
+model SafeEntry {
+  id          String   @id @default(cuid())
+  date        DateTime @default(now()) // when the cash was put into the safe
+  branch      String   @default("suli") // "suli" | "erbil"
+  amount      Int // IQD added to the safe
+  note        String?
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([date])
+  @@index([branch])
+}
+
+// ----------------------- Cash withdrawals (admin-only, per-branch) -----------------------
+// Money actually LEAVING the business to a named person. A withdrawal is sourced
+// from either the safe (draws down the safe balance) or directly from the manager
+// (draws down "Manager currently holds" / Expected Cash on Hand).
+model CashWithdrawal {
+  id          String   @id @default(cuid())
+  date        DateTime
+  branch      String   @default("suli") // "suli" | "erbil"
+  amount      Int // IQD, positive
+  source      String // "safe" | "manager"
+  recipient   String // free-text name of the person who received the cash
+  note        String?
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([date])
+  @@index([recipient])
+  @@index([branch])
+}
+
+// ----------------------- Cash adjustments (admin-only, per-branch) -----------------------
+// Historical cash income that never passed through the POS (e.g. sales made
+// before the system went live) but is real cash the manager received and later
+// spent — so it must count toward "Manager currently holds" / Expected Cash on
+// Hand. Summed ALL-TIME (not scoped to "this month").
+model CashAdjustment {
+  id          String   @id @default(cuid())
+  date        DateTime // the day this cash was actually received
+  branch      String   @default("suli") // "suli" | "erbil"
+  amount      Int // IQD, positive
+  note        String?
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([date])
+  @@index([branch])
+}
+
+// ----------------------- Delivery platform settings (per-branch) -----------------------
+// One row per branch: which delivery app the branch uses and what commission it
+// takes. Suli → Toters (20%), Erbil → Talabat (own %). Admin-editable from the
+// Delivery page; the POS reads it to label the delivery button and compute net.
+model DeliverySettings {
+  id            String   @id @default(cuid())
+  branch        String   @unique // "suli" | "erbil"
+  platformName  String // "Toters" | "Talabat" | ...
+  commissionPct Float // e.g. 20 = platform keeps 20% of gross
+  color         String   @default("#0fb79b") // accent used for the delivery UI
+  updatedAt     DateTime @updatedAt
+}
+
+// ----------------------- Delivery orders (platform delivery, per-branch) -----------------------
+// Kept in SEPARATE tables from branch Orders. Never join/aggregate with `Order`,
+// so delivery revenue is automatically excluded from Sales & Profit.
+// platformName + commissionPct are SNAPSHOTS taken from DeliverySettings at
+// order time, so changing the commission later never rewrites history.
+model DeliveryOrder {
   id              String              @id @default(cuid())
-  checklistId     String
-  checklist       DailyNeedsChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
-  inventoryItemId String
-  inventoryItem   InventoryItem       @relation(fields: [inventoryItemId], references: [id])
-  needsRestock    Boolean             @default(false)
-  note            String?
+  branch          String              @default("suli") // "suli" | "erbil"
+  platformName    String              @default("Toters") // snapshot
+  commissionPct   Float               @default(20) // snapshot
+  reference       String? // driver name / order ref, e.g. "Talabat #4521"
+  grossTotal      Int // full order value
+  netTotal        Int // gross × (1 − commissionPct/100)
+  status          String              @default("pending") // pending | ready | driver_arrived | collected
+  placedAt        DateTime            @default(now())
+  readyAt         DateTime?
+  driverArrivedAt DateTime?
+  collectedAt     DateTime?
+  prepSeconds     Int? // placed -> ready
+  arriveSeconds   Int? // ready -> driver arrived
+  staffId         String?
+  staff           User?               @relation(fields: [staffId], references: [id])
+  items           DeliveryOrderItem[]
 
-  @@index([checklistId])
+  @@index([placedAt])
+  @@index([status])
+  @@index([branch])
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Production / Recipe costing (module 6) + Ingredient Usage (module 5)
-// + Estimated Profit (module 7, purely derived — no dedicated table)
-// ─────────────────────────────────────────────────────────────────────────
+model DeliveryOrderItem {
+  id              String        @id @default(cuid())
+  deliveryOrderId String
+  order           DeliveryOrder @relation(fields: [deliveryOrderId], references: [id], onDelete: Cascade)
+  name            String
+  price           Int
+  quantity        Int
+  modifier        String?
+}
 
+// ----------------------- Events (external pop-up events, per-branch) -----------------------
+model Event {
+  id        String          @id @default(cuid())
+  name      String
+  branch    String          @default("suli") // "suli" | "erbil"
+  startDate DateTime        @default(now())
+  endDate   DateTime?
+  location  String? // location / description
+  status    String          @default("active") // active | closed
+  closedAt  DateTime?
+  createdAt DateTime        @default(now())
+  orders    Order[]
+  movements StockMovement[]
+  expenses  Expense[]
+
+  @@index([status])
+  @@index([branch])
+}
+
+// ----------------------- Roles & Permissions -----------------------
+// One row per (role, permission key). present + allowed = granted.
+model RolePermission {
+  id      String  @id @default(cuid())
+  role    String
+  key     String // e.g. "pos.use", "menu.manage", "staff.manage"
+  allowed Boolean @default(false)
+
+  @@unique([role, key])
+}
+
+// ----------------------- Audit log -----------------------
+model AuditLog {
+  id        String   @id @default(cuid())
+  staffId   String?
+  staff     User?    @relation(fields: [staffId], references: [id])
+  action    String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// ======================= Production (Recipe BOM) =======================
+// One Recipe per sellable MenuItem. gross_profit = MenuItem.price - Σ(line_totals).
+// (Branch scoping is inherited through MenuItem → Category.branch.)
 model Recipe {
-  id         String   @id @default(cuid())
-  menuItemId String   @unique
-  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
-  notes      String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  lines RecipeLine[]
+  id          String             @id @default(cuid())
+  menuItemId  String             @unique
+  menuItem    MenuItem           @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  notes       String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  ingredients RecipeIngredient[]
 }
 
-model RecipeLine {
-  id               String           @id @default(cuid())
-  recipeId         String
-  recipe           Recipe           @relation(fields: [recipeId], references: [id], onDelete: Cascade)
-  sourceType       RecipeSourceType
-  warehouseItemId  String?
-  warehouseItem    InventoryItem?   @relation(fields: [warehouseItemId], references: [id])
-  batchId          String?
-  batch            Batch?           @relation(fields: [batchId], references: [id])
-  manualCost       Decimal?         @db.Decimal(12, 2)
-  amountPerServing Decimal          @db.Decimal(12, 4)
+// A single BOM line. cost_per_gram may be entered manually, OR derived
+// dynamically from a linked raw InventoryItem (lastUnitCost).
+model RecipeIngredient {
+  id              String         @id @default(cuid())
+  recipeId        String
+  recipe          Recipe         @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  name            String // ingredient_name (label / snapshot)
+  gramsPerServing Float          @default(0)
+  costPerGram     Float          @default(0) // manual fallback when no link is set
+  inventoryItemId String? // derive cost from a raw warehouse item
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: SetNull)
+  sortOrder       Int            @default(0)
 
   @@index([recipeId])
 }
 
-model Batch {
+// ----------------------- Daily Needs (staff restock checklist, per-branch) -----------------------
+// Optional persistence of a completed Daily Needs list. `items` is JSON-encoded:
+//   [{ category: string, name: string, quantity: number, unit: string }]
+model DailyNeedsLog {
   id          String   @id @default(cuid())
-  name        String
-  nameKu      String
-  unit        String
-  totalAmount Decimal  @db.Decimal(12, 3) // total yield from one production run
-  costPerUnit Decimal  @default(0) @db.Decimal(12, 4)
+  branch      String   @default("suli") // "suli" | "erbil"
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+  items       String
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
 
-  ingredients BatchIngredient[]
-  productions BatchProduction[]
-  recipeLines RecipeLine[]
-  dispatches  Dispatch[]
+  @@index([createdAt])
+  @@index([branch])
 }
 
-model BatchIngredient {
-  id              String        @id @default(cuid())
-  batchId         String
-  batch           Batch         @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  warehouseItemId String
-  warehouseItem   InventoryItem @relation(fields: [warehouseItemId], references: [id])
-  amount          Decimal       @db.Decimal(12, 3) // amount needed per one full batch run
-}
-
-model BatchProduction {
-  id           String   @id @default(cuid())
-  batchId      String
-  batch        Batch    @relation(fields: [batchId], references: [id])
-  quantityMade Decimal  @db.Decimal(12, 3)
-  totalCost    Decimal  @db.Decimal(12, 2)
-  userId       String
-  user         User     @relation(fields: [userId], references: [id])
-  producedAt   DateTime @default(now())
-}
-
-model Dispatch {
-  id           String   @id @default(cuid())
-  batchId      String
-  batch        Batch    @relation(fields: [batchId], references: [id])
-  cityId       String // destination city
-  city         City     @relation(fields: [cityId], references: [id])
-  quantity     Decimal  @db.Decimal(12, 3)
-  cost         Decimal  @db.Decimal(12, 2)
-  userId       String
-  user         User     @relation(fields: [userId], references: [id])
-  dispatchedAt DateTime @default(now())
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Expenses (module 8)
-// ─────────────────────────────────────────────────────────────────────────
-
-model Expense {
-  id          String          @id @default(cuid())
-  cityId      String
-  city        City            @relation(fields: [cityId], references: [id])
-  category    ExpenseCategory
-  amount      Int
-  description String?
-  date        DateTime
-  eventId     String?
-  event       Event?          @relation(fields: [eventId], references: [id])
-  userId      String
-  user        User            @relation(fields: [userId], references: [id])
-  createdAt   DateTime        @default(now())
-
-  @@index([cityId, date])
-  @@index([eventId])
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Events (module 9)
-// ─────────────────────────────────────────────────────────────────────────
-
-model Event {
-  id            String      @id @default(cuid())
-  name          String
-  nameKu        String
-  locationLabel String?
-  startDate     DateTime
-  endDate       DateTime?
-  status        EventStatus @default(ACTIVE)
-  closedAt      DateTime?
-  evalRevenue   Int?
-  evalUsageCost Decimal?    @db.Decimal(12, 2)
-  evalExpenses  Int?
-  evalProfit    Int?
-  createdAt     DateTime    @default(now())
-
-  orders         Order[]
-  stockMovements StockMovement[]
-  expenses       Expense[]
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Cash Tracking (module 12)
-// ─────────────────────────────────────────────────────────────────────────
-
-model SafeDeposit {
-  id        String   @id @default(cuid())
-  cityId    String
-  city      City     @relation(fields: [cityId], references: [id])
-  amount    Int
-  date      DateTime
-  note      String?
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  createdAt DateTime @default(now())
-
-  @@index([cityId, date])
-}
-
-model Withdrawal {
-  id            String     @id @default(cuid())
-  cityId        String
-  city          City       @relation(fields: [cityId], references: [id])
-  amount        Int
-  source        CashSource
-  recipientName String
-  date          DateTime
-  note          String?
-  userId        String
-  user          User       @relation(fields: [userId], references: [id])
-  createdAt     DateTime   @default(now())
-
-  @@index([cityId, date])
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// App-wide settings (business hours for business-day boundary, module 10/13)
-// ─────────────────────────────────────────────────────────────────────────
-
-model AppSettings {
-  id          Int @id @default(1)
-  openingHour Int @default(10) // 0-23, local time
-  closingHour Int @default(23) // 0-23, may be < openingHour if crossing midnight
+// ----------------------- App settings (singleton) -----------------------
+// Configurable business/operating hours, used by the business-day reporting
+// logic (lib/businessDay.ts). A single row (id = 1) holds the current values;
+// `openHour` is when a trading day begins (e.g. 17 = 5 PM) and `closeHour` when
+// it ends (e.g. 1 = 1 AM). When closeHour <= openHour the close lands on the
+// NEXT calendar day, so one business day spans two dates. Admin-editable from
+// the Staff page; everything else reads it through getBusinessHours().
+model BusinessHours {
+  id        Int      @id @default(1)
+  openHour  Int      @default(17)
+  closeHour Int      @default(1)
+  updatedAt DateTime @updatedAt
 }

@@ -1,34 +1,36 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireRole, logAudit } from "@/lib/auth";
-import { withApiError, safeJson } from "@/lib/api";
+import { authorize, audit } from "@/lib/guard";
+import { activeBranch } from "@/lib/branchScope";
 
-interface UpdateCategoryBody {
-  name?: string;
-  nameKu?: string;
-  sortOrder?: number;
+export async function PATCH(req: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
+  const guard = await authorize("menu.manage");
+  if (!guard.ok) return guard.response;
+  const branch = await activeBranch(guard.session);
+
+  const target = await prisma.category.findFirst({ where: { id: params.id, branch } });
+  if (!target) return NextResponse.json({ error: "Category not found" }, { status: 404 });
+
+  const body = await req.json().catch(() => ({}));
+  const data: { name?: string; sortOrder?: number } = {};
+  if (typeof body.name === "string") data.name = body.name.trim();
+  if (typeof body.sortOrder === "number") data.sortOrder = body.sortOrder;
+
+  const category = await prisma.category.update({ where: { id: params.id }, data });
+  await audit(guard.session.sub, `Updated category "${category.name}"`);
+  return NextResponse.json({ category });
 }
 
-export const PATCH = withApiError(
-  async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const user = await requireRole("ADMIN");
-    const { id } = await params;
-    const body = await safeJson<UpdateCategoryBody>(req);
+export async function DELETE(_req: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
+  const guard = await authorize("menu.manage");
+  if (!guard.ok) return guard.response;
+  const branch = await activeBranch(guard.session);
 
-    const category = await prisma.category.update({ where: { id }, data: body });
-    await logAudit(user.id, `renamed menu category to "${category.name}"`, "Category", id);
-    return NextResponse.json({ category });
-  },
-);
-
-export const DELETE = withApiError(
-  async (_req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const user = await requireRole("ADMIN");
-    const { id } = await params;
-
-    const category = await prisma.category.findUnique({ where: { id } });
-    await prisma.category.delete({ where: { id } });
-    await logAudit(user.id, `deleted menu category "${category?.name ?? id}"`, "Category", id);
-    return NextResponse.json({ ok: true });
-  },
-);
+  const cat = await prisma.category.findFirst({ where: { id: params.id, branch } });
+  if (!cat) return NextResponse.json({ error: "Category not found" }, { status: 404 });
+  await prisma.category.delete({ where: { id: params.id } }); // cascades to items
+  await audit(guard.session.sub, `Deleted category "${cat?.name ?? params.id}"`);
+  return new NextResponse(null, { status: 204 });
+}

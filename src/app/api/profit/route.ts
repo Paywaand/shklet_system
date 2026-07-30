@@ -1,47 +1,78 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireRole } from "@/lib/auth";
-import { withApiError } from "@/lib/api";
+import { authorize } from "@/lib/guard";
+import { activeBranch } from "@/lib/branchScope";
+import { getDeliverySettings } from "@/lib/delivery";
 
-export const GET = withApiError(async (req: NextRequest) => {
-  await requireRole("ADMIN");
-  const { searchParams } = new URL(req.url);
-  const from = searchParams.get("from");
-  const to = searchParams.get("to");
+// GET /api/profit?from=ISO&to=ISO — scoped to the active branch.
+// Gross profit = sales revenue - expenses - warehouse usage cost (all within the range).
+export async function GET(req: Request) {
+  const guard = await authorize("profit.view");
+  if (!guard.ok) return guard.response;
+  const branch = await activeBranch(guard.session);
 
-  const dateWhere =
-    from || to
-      ? { placedAt: { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } }
-      : {};
+  const url = new URL(req.url);
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  const gte = from ? new Date(from) : undefined;
+  const lte = to ? new Date(to) : undefined;
 
-  const [orders, expenses, movements] = await Promise.all([
-    prisma.order.findMany({ where: { ...dateWhere, type: "WALKIN", status: { not: "CANCELLED" } } }),
+  const [orders, expenses, usage, delivery, settings] = await Promise.all([
+    // Sum + count pushed to the DB (avoids streaming every row back just to add
+    // them up in JS — matters once a range spans thousands of orders). Cancelled
+    // orders never took money and must not count as sales.
+    prisma.order.aggregate({
+      where: { branch, placedAt: { gte, lte }, status: { not: "cancelled" } },
+      _sum: { total: true },
+      _count: true,
+    }),
     prisma.expense.aggregate({
-      where: from || to ? { date: { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } } : {},
+      where: { branch, date: { gte, lte } },
       _sum: { amount: true },
     }),
-    prisma.stockMovement.findMany({
+    // Deductions (change < 0) that have a recorded cost. `totalCost` is stored
+    // negative on deductions, so the summed magnitude is taken below. Scoped to
+    // the branch through the movement's warehouse item.
+    prisma.stockMovement.aggregate({
       where: {
-        type: "REMOVE",
-        reason: { in: ["DAILY_USAGE", "WASTAGE"] },
-        ...(from || to
-          ? { createdAt: { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } }
-          : {}),
+        item: { branch },
+        createdAt: { gte, lte },
+        change: { lt: 0 },
+        totalCost: { not: null },
       },
+      _sum: { totalCost: true },
     }),
+    // Delivery-platform revenue shown separately — NOT included in branch gross profit.
+    prisma.deliveryOrder.aggregate({
+      where: { branch, placedAt: { gte, lte } },
+      _sum: { grossTotal: true, netTotal: true },
+      _count: true,
+    }),
+    getDeliverySettings(branch),
   ]);
 
-  const totalSales = orders.reduce((sum, o) => sum + o.total, 0);
+  const totalSales = orders._sum.total ?? 0;
   const totalExpenses = expenses._sum.amount ?? 0;
-  const ingredientCost = movements.reduce((sum, m) => sum + Number(m.amount) * Number(m.unitCostAtTime), 0);
+  // totalCost on deductions is negative — take the magnitude.
+  const ingredientCost = Math.abs(usage._sum.totalCost ?? 0);
   const grossProfit = totalSales - totalExpenses - ingredientCost;
-  const grossMargin = totalSales > 0 ? (grossProfit / totalSales) * 100 : 0;
+
+  // Delivery figures (kept entirely separate from the branch gross-profit calc above).
+  const deliveryGross = delivery._sum.grossTotal ?? 0;
+  const deliveryNet = delivery._sum.netTotal ?? 0;
 
   return NextResponse.json({
     totalSales,
     totalExpenses,
     ingredientCost: Math.round(ingredientCost),
     grossProfit: Math.round(grossProfit),
-    grossMargin: Math.round(grossMargin * 10) / 10,
+    orderCount: orders._count,
+    delivery: {
+      platformName: settings.platformName,
+      gross: deliveryGross,
+      commission: deliveryGross - deliveryNet,
+      net: deliveryNet,
+      orderCount: delivery._count,
+    },
   });
-});
+}

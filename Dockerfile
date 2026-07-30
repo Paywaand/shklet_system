@@ -1,29 +1,25 @@
-# ── Build stage ─────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+# --- Shklet POS — production image (Next.js + Prisma + PostgreSQL) ---
+FROM node:22-alpine AS base
 WORKDIR /app
+# Prisma needs openssl on Alpine; postgresql-client provides pg_dump for the
+# daily R2 database backups (see src/lib/backup.ts).
+RUN apk add --no-cache openssl postgresql-client tzdata
 
-COPY package.json package-lock.json ./
+# Install dependencies (including dev deps — Prisma CLI is needed at runtime for migrations).
+# Copy the Prisma schema BEFORE `npm ci` so the postinstall `prisma generate` can find it.
+COPY package*.json ./
+COPY prisma ./prisma
 RUN npm ci
 
+# Build the app.
 COPY . .
-RUN npx prisma generate
 RUN npm run build
 
-# ── Runtime stage ───────────────────────────────────────────────────────
-FROM node:20-alpine AS runner
-WORKDIR /app
 ENV NODE_ENV=production
-
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/prisma ./prisma
-
+ENV TZ=Asia/Baghdad
+# Railway provides PORT; default to 3000 locally.
+ENV PORT=3000
 EXPOSE 3000
 
-# Run migrations then start the server. The seed script is idempotent
-# (upserts) so it's safe to include, but it's intentionally NOT run
-# automatically here — run it once manually after first deploy:
-#   railway run npm run db:seed
-CMD npx prisma migrate deploy && npm run start
+# Apply migrations, then start the server. (Run `npm run seed` once after first deploy.)
+CMD ["npm", "run", "start:prod"]

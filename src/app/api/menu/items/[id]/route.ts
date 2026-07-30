@@ -1,126 +1,62 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireRole, requireUser, logAudit } from "@/lib/auth";
-import { withApiError, safeJson } from "@/lib/api";
+import { authorize, audit } from "@/lib/guard";
+import { activeBranch } from "@/lib/branchScope";
+import { ModifiersSchema } from "@/lib/schemas";
 
-interface CityPriceInput {
-  cityId: string;
-  price: number;
-  available: boolean;
+export async function PATCH(req: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
+  const guard = await authorize("menu.manage");
+  if (!guard.ok) return guard.response;
+  const branch = await activeBranch(guard.session);
+
+  const existing = await prisma.menuItem.findFirst({ where: { id: params.id, category: { branch } } });
+  if (!existing) return NextResponse.json({ error: "Item not found" }, { status: 404 });
+
+  const body = await req.json().catch(() => ({}));
+  const data: Record<string, unknown> = {};
+  if (typeof body.name === "string") data.name = body.name.trim();
+  if (body.price !== undefined) {
+    const p = Number(body.price);
+    if (!Number.isFinite(p) || p < 0)
+      return NextResponse.json({ error: "Invalid price" }, { status: 400 });
+    data.price = Math.round(p);
+  }
+  if (body.categoryId !== undefined) {
+    // Moving between categories is allowed only within the same branch.
+    const cat = await prisma.category.findFirst({ where: { id: String(body.categoryId), branch } });
+    if (!cat) return NextResponse.json({ error: "Category not found" }, { status: 400 });
+    data.categoryId = body.categoryId;
+  }
+  if (body.description !== undefined) data.description = body.description?.trim() || null;
+  if (body.imageUrl !== undefined) data.imageUrl = body.imageUrl?.trim() || null;
+  if (typeof body.available === "boolean") data.available = body.available;
+  if (typeof body.sortOrder === "number") data.sortOrder = body.sortOrder;
+  if (body.modifiers !== undefined) {
+    if (body.modifiers === null) {
+      data.modifiers = null;
+    } else {
+      const parsed = ModifiersSchema.safeParse(body.modifiers);
+      if (!parsed.success)
+        return NextResponse.json({ error: "Invalid modifiers" }, { status: 400 });
+      data.modifiers = parsed.data.length ? JSON.stringify(parsed.data) : null;
+    }
+  }
+
+  const item = await prisma.menuItem.update({ where: { id: params.id }, data });
+  await audit(guard.session.sub, `Updated item "${item.name}"`);
+  return NextResponse.json({ item });
 }
 
-interface ModifierOptionInput {
-  name: string;
-  nameKu: string;
-  extraPrice: number;
+export async function DELETE(_req: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
+  const guard = await authorize("menu.manage");
+  if (!guard.ok) return guard.response;
+  const branch = await activeBranch(guard.session);
+
+  const item = await prisma.menuItem.findFirst({ where: { id: params.id, category: { branch } } });
+  if (!item) return NextResponse.json({ error: "Item not found" }, { status: 404 });
+  await prisma.menuItem.delete({ where: { id: params.id } });
+  await audit(guard.session.sub, `Deleted item "${item?.name ?? params.id}"`);
+  return new NextResponse(null, { status: 204 });
 }
-
-interface ModifierGroupInput {
-  name: string;
-  nameKu: string;
-  required: boolean;
-  options: ModifierOptionInput[];
-}
-
-interface UpdateItemBody {
-  name?: string;
-  nameKu?: string;
-  description?: string | null;
-  imageUrl?: string | null;
-  basePrice?: number;
-  cityPrices?: CityPriceInput[];
-  modifierGroups?: ModifierGroupInput[];
-}
-
-export const PATCH = withApiError(
-  async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const user = await requireRole("ADMIN");
-    const { id } = await params;
-    const body = await safeJson<UpdateItemBody>(req);
-
-    await prisma.$transaction(async (tx) => {
-      await tx.menuItem.update({
-        where: { id },
-        data: {
-          name: body.name,
-          nameKu: body.nameKu,
-          description: body.description,
-          imageUrl: body.imageUrl,
-          basePrice: body.basePrice,
-        },
-      });
-
-      if (body.cityPrices) {
-        for (const cp of body.cityPrices) {
-          await tx.menuItemCityPrice.upsert({
-            where: { menuItemId_cityId: { menuItemId: id, cityId: cp.cityId } },
-            update: { price: cp.price, available: cp.available },
-            create: { menuItemId: id, cityId: cp.cityId, price: cp.price, available: cp.available },
-          });
-        }
-      }
-
-      if (body.modifierGroups) {
-        // Full replace — simplest correct approach for a modifier editor.
-        await tx.modifierGroup.deleteMany({ where: { menuItemId: id } });
-        for (const [gi, g] of body.modifierGroups.entries()) {
-          await tx.modifierGroup.create({
-            data: {
-              menuItemId: id,
-              name: g.name,
-              nameKu: g.nameKu,
-              required: g.required,
-              sortOrder: gi,
-              options: {
-                create: g.options.map((o, oi) => ({
-                  name: o.name,
-                  nameKu: o.nameKu,
-                  extraPrice: o.extraPrice,
-                  sortOrder: oi,
-                })),
-              },
-            },
-          });
-        }
-      }
-    });
-
-    const item = await prisma.menuItem.findUnique({
-      where: { id },
-      include: { cityPrices: true, modifierGroups: { include: { options: true } } },
-    });
-
-    await logAudit(user.id, `updated menu item "${item?.name}"`, "MenuItem", id);
-    return NextResponse.json({ item });
-  },
-);
-
-export const DELETE = withApiError(
-  async (_req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const user = await requireRole("ADMIN");
-    const { id } = await params;
-    const item = await prisma.menuItem.findUnique({ where: { id } });
-    await prisma.menuItem.delete({ where: { id } });
-    await logAudit(user.id, `deleted menu item "${item?.name ?? id}"`, "MenuItem", id);
-    return NextResponse.json({ ok: true });
-  },
-);
-
-/** Quick toggle for "hidden from cashier" at a specific city (available flag). */
-export const PUT = withApiError(
-  async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const user = await requireUser();
-    if (user.role === "CASHIER") throw Object.assign(new Error("Forbidden"), { status: 403 });
-    const { id } = await params;
-    const { cityId, available } = await safeJson<{ cityId: string; available: boolean }>(req);
-
-    const cityScopeOk = user.role === "ADMIN" || user.cityId === cityId;
-    if (!cityScopeOk) throw Object.assign(new Error("Forbidden"), { status: 403 });
-
-    const updated = await prisma.menuItemCityPrice.update({
-      where: { menuItemId_cityId: { menuItemId: id, cityId } },
-      data: { available },
-    });
-    return NextResponse.json({ cityPrice: updated });
-  },
-);

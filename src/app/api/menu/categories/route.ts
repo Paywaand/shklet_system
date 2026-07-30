@@ -1,45 +1,20 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireUser, requireRole, logAudit } from "@/lib/auth";
-import { withApiError, safeJson } from "@/lib/api";
+import { authorize, audit } from "@/lib/guard";
+import { activeBranch } from "@/lib/branchScope";
 
-/** Full menu tree: categories → items → per-city prices → modifier groups. */
-export const GET = withApiError(async () => {
-  await requireUser();
-  const categories = await prisma.category.findMany({
-    orderBy: { sortOrder: "asc" },
-    include: {
-      items: {
-        orderBy: { sortOrder: "asc" },
-        include: {
-          cityPrices: { include: { city: true } },
-          modifierGroups: { include: { options: { orderBy: { sortOrder: "asc" } } }, orderBy: { sortOrder: "asc" } },
-        },
-      },
-    },
-  });
-  return NextResponse.json({ categories });
-});
+export async function POST(req: Request) {
+  const guard = await authorize("menu.manage");
+  if (!guard.ok) return guard.response;
+  const branch = await activeBranch(guard.session);
 
-interface CreateCategoryBody {
-  name: string;
-  nameKu: string;
-}
+  const { name } = await req.json().catch(() => ({}));
+  if (!name?.trim()) return NextResponse.json({ error: "Name is required" }, { status: 400 });
 
-/** Admin-only: category structure is global, not city-scoped. */
-export const POST = withApiError(async (req: NextRequest) => {
-  const user = await requireRole("ADMIN");
-  const body = await safeJson<CreateCategoryBody>(req);
-
-  const maxSort = await prisma.category.aggregate({ _max: { sortOrder: true } });
+  const count = await prisma.category.count({ where: { branch } });
   const category = await prisma.category.create({
-    data: {
-      name: body.name,
-      nameKu: body.nameKu,
-      sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
-    },
+    data: { name: name.trim(), branch, sortOrder: count },
   });
-
-  await logAudit(user.id, `created menu category "${body.name}"`, "Category", category.id);
-  return NextResponse.json({ category });
-});
+  await audit(guard.session.sub, `Created category "${category.name}" (${branch})`);
+  return NextResponse.json({ category }, { status: 201 });
+}

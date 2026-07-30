@@ -1,614 +1,399 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { motion } from "framer-motion";
-import { useLanguage } from "@/i18n";
-import { useCurrentUser } from "@/hooks/use-current-user";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input, Label } from "@/components/ui/input";
-import { Modal } from "@/components/ui/modal";
-import { PageHeader } from "@/components/ui/page-header";
-import { EmptyState } from "@/components/ui/empty-state";
-import { SkeletonGrid } from "@/components/ui/skeleton";
-import { formatMoney } from "@/lib/money";
-import toast from "react-hot-toast";
-import { Plus, Trash2, Pencil, Eye, EyeOff, UtensilsCrossed, Sparkles } from "lucide-react";
-import { cn } from "@/lib/cn";
+import { useState } from "react";
+import { Plus, Pencil, Trash2, FolderPlus, EyeOff, SlidersHorizontal } from "lucide-react";
+import { useFetch, apiSend } from "@/lib/client";
+import { iqd } from "@/lib/format";
+import type { Category, MenuItem, ModifierGroup } from "@/lib/types";
+import { ModifiersSchema, safeParseJson } from "@/lib/schemas";
 
-interface City {
-  id: string;
-  name: string;
-  nameKu: string;
+function parseModifiers(json: string | null | undefined): ModifierGroup[] {
+  // Bounded + schema-validated parse (size cap before JSON.parse) — see lib/schemas.ts.
+  return safeParseJson(json, ModifiersSchema, []);
 }
+import { PageHeader } from "@/components/PageHeader";
+import { Loading, ErrorState, EmptyState, Modal } from "@/components/ui";
+import { useToast } from "@/components/Toast";
+import { useLanguage } from "@/lib/i18n/LanguageContext";
 
-interface CityPrice {
-  id: string;
-  cityId: string;
-  price: number;
-  available: boolean;
-  city: City;
-}
+export default function MenuPage() {
+  const { data, loading, error, reload } = useFetch<{ categories: Category[] }>("/api/menu?all=1");
+  const toast = useToast();
+  const { t } = useLanguage();
 
-interface ModifierOption {
-  id: string;
-  name: string;
-  nameKu: string;
-  extraPrice: number;
-}
+  const [catModal, setCatModal] = useState<{ open: boolean; cat?: Category }>({ open: false });
+  const [itemModal, setItemModal] = useState<{ open: boolean; item?: MenuItem; categoryId?: string }>(
+    { open: false }
+  );
 
-interface ModifierGroup {
-  id: string;
-  name: string;
-  nameKu: string;
-  required: boolean;
-  options: ModifierOption[];
-}
+  if (loading) return <Loading />;
+  if (error) return <ErrorState message={error} onRetry={reload} />;
+  const categories = data?.categories ?? [];
 
-interface MenuItem {
-  id: string;
-  name: string;
-  nameKu: string;
-  description: string | null;
-  imageUrl: string | null;
-  basePrice: number;
-  cityPrices: CityPrice[];
-  modifierGroups: ModifierGroup[];
-}
-
-interface Category {
-  id: string;
-  name: string;
-  nameKu: string;
-  items: MenuItem[];
-}
-
-const CATEGORY_ACCENTS = ["#EF3340", "#249E6B", "#FEDB00", "#AA8066", "#CBA3D8"];
-
-export default function MenuManagementPage() {
-  const { t, lang } = useLanguage();
-  const { user } = useCurrentUser();
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [cities, setCities] = useState<City[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
-  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
-  const [showItemForm, setShowItemForm] = useState(false);
-  const [newCategoryOpen, setNewCategoryOpen] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState("");
-  const [newCategoryNameKu, setNewCategoryNameKu] = useState("");
-
-  const isAdmin = user?.role === "ADMIN";
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [menuRes, citiesRes] = await Promise.all([
-      fetch("/api/menu/categories"),
-      fetch("/api/cities"),
-    ]);
-    const menuData = await menuRes.json();
-    const citiesData = await citiesRes.json();
-    setCategories(menuData.categories ?? []);
-    setCities((citiesData.cities ?? []).map((c: City) => ({ id: c.id, name: c.name, nameKu: c.nameKu })));
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  async function createCategory() {
-    if (!newCategoryName.trim() || !newCategoryNameKu.trim()) return;
-    const res = await fetch("/api/menu/categories", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newCategoryName, nameKu: newCategoryNameKu }),
-    });
-    if (res.ok) {
-      toast.success(t("menu.categorySaved"));
-      setNewCategoryName("");
-      setNewCategoryNameKu("");
-      setNewCategoryOpen(false);
-      load();
-    } else {
-      toast.error(t("common.somethingWentWrong"));
+  async function deleteCategory(cat: Category) {
+    if (!confirm(t("menu.confirm.deleteCategory", { name: cat.name }))) return;
+    try {
+      await apiSend(`/api/menu/categories/${cat.id}`, "DELETE");
+      toast.show(t("menu.toast.categoryDeleted"));
+      reload();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : t("common.failed"), "error");
     }
   }
 
-  async function deleteCategory(id: string) {
-    if (!confirm(t("menu.confirmDeleteCategory"))) return;
-    const res = await fetch(`/api/menu/categories/${id}`, { method: "DELETE" });
-    if (res.ok) {
-      toast.success(t("common.success"));
-      load();
+  async function deleteItem(item: MenuItem) {
+    if (!confirm(t("menu.confirm.deleteItem", { name: item.name }))) return;
+    try {
+      await apiSend(`/api/menu/items/${item.id}`, "DELETE");
+      toast.show(t("menu.toast.itemDeleted"));
+      reload();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : t("common.failed"), "error");
     }
   }
 
-  async function deleteItem(id: string) {
-    if (!confirm(t("menu.confirmDeleteItem"))) return;
-    const res = await fetch(`/api/menu/items/${id}`, { method: "DELETE" });
-    if (res.ok) {
-      toast.success(t("menu.itemDeleted"));
-      load();
+  async function toggleAvailable(item: MenuItem) {
+    try {
+      await apiSend(`/api/menu/items/${item.id}`, "PATCH", { available: !item.available });
+      reload();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : t("common.failed"), "error");
     }
-  }
-
-  async function toggleAvailability(item: MenuItem, cityId: string, current: boolean) {
-    const res = await fetch(`/api/menu/items/${item.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cityId, available: !current }),
-    });
-    if (res.ok) load();
   }
 
   return (
-    <div>
+    <>
       <PageHeader
-        title={t("menu.header")}
-        actions={
-          isAdmin && (
-            <Button variant="outline" onClick={() => setNewCategoryOpen(true)}>
-              <Plus size={16} /> {t("menu.addCategory")}
-            </Button>
-          )
+        title={t("menu.header.title")}
+        subtitle={t("menu.header.subtitle")}
+        action={
+          <button className="btn-ghost px-3 py-2 text-sm" onClick={() => setCatModal({ open: true })}>
+            <FolderPlus size={18} /> {t("menu.header.newCategory")}
+          </button>
         }
       />
 
-      {loading ? (
-        <SkeletonGrid count={6} />
-      ) : categories.length === 0 ? (
-        <EmptyState icon={UtensilsCrossed} title={t("common.noResultsFound")} />
+      {categories.length === 0 ? (
+        <EmptyState title={t("menu.empty.title")} hint={t("menu.empty.hint")} />
       ) : (
-        <div className="space-y-6">
-          {categories.map((cat, ci) => (
-            <motion.div key={cat.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: ci * 0.03 }}>
-              <Card>
-                <CardContent className="pt-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2.5">
-                      <span
-                        className="h-2.5 w-2.5 rounded-full shrink-0"
-                        style={{ backgroundColor: CATEGORY_ACCENTS[ci % CATEGORY_ACCENTS.length] }}
-                      />
-                      <h2 className="text-[17px] font-bold tracking-[-0.01em]">{lang === "ku" ? cat.nameKu : cat.name}</h2>
-                      <span className="text-xs font-semibold text-[var(--muted)] bg-black/[0.04] dark:bg-white/[0.06] rounded-full px-2 py-0.5">
-                        {t("menu.itemsCount", { n: cat.items.length })}
-                      </span>
-                    </div>
-                    {isAdmin && (
-                      <div className="flex items-center gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            setEditingCategoryId(cat.id);
-                            setEditingItem(null);
-                            setShowItemForm(true);
-                          }}
-                        >
-                          <Plus size={14} /> {t("menu.addItem")}
-                        </Button>
-                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => deleteCategory(cat.id)}>
-                          <Trash2 size={14} className="text-shklet-red" />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
+        <div className="flex flex-col gap-5">
+          {categories.map((cat) => (
+            <section key={cat.id} className="card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-lg font-bold">{cat.name}</h2>
+                <div className="flex gap-1">
+                  <button
+                    className="btn-ghost size-9 rounded-lg"
+                    onClick={() => setCatModal({ open: true, cat })}
+                    title={t("menu.category.rename")}
+                  >
+                    <Pencil size={16} />
+                  </button>
+                  <button
+                    className="btn-ghost size-9 rounded-lg text-red-500"
+                    onClick={() => deleteCategory(cat)}
+                    title={t("common.delete")}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {cat.items.map((item) => (
-                      <div
-                        key={item.id}
-                        className="group rounded-xl border border-[var(--card-border)] p-3.5 hover:border-shklet-red/30 hover:shadow-elevation-1 transition-all duration-150"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="font-bold truncate">{lang === "ku" ? item.nameKu : item.name}</p>
-                            <p className="text-xs text-[var(--muted)] truncate">
-                              {lang === "ku" ? item.name : item.nameKu}
-                            </p>
-                          </div>
-                          {isAdmin && (
-                            <div className="flex gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button
-                                onClick={() => {
-                                  setEditingItem(item);
-                                  setEditingCategoryId(cat.id);
-                                  setShowItemForm(true);
-                                }}
-                                className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10"
-                              >
-                                <Pencil size={13} />
-                              </button>
-                              <button
-                                onClick={() => deleteItem(item.id)}
-                                className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-shklet-red/10"
-                              >
-                                <Trash2 size={13} className="text-shklet-red" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="mt-3 space-y-1.5">
-                          {cities.map((city) => {
-                            const cp = item.cityPrices.find((p) => p.cityId === city.id);
-                            if (!cp) return null;
-                            return (
-                              <div key={city.id} className="flex items-center justify-between text-sm">
-                                <span className="text-[var(--muted)] text-[13px]">
-                                  {lang === "ku" ? city.nameKu : city.name}
-                                </span>
-                                <div className="flex items-center gap-2">
-                                  <span
-                                    className={cn(
-                                      "ltr-nums font-bold text-[13px]",
-                                      !cp.available && "text-[var(--muted-soft)] line-through",
-                                    )}
-                                  >
-                                    {formatMoney(cp.price)}
-                                  </span>
-                                  {isAdmin && (
-                                    <button
-                                      onClick={() => toggleAvailability(item, city.id, cp.available)}
-                                      title={cp.available ? t("menu.available") : t("menu.hiddenFromCashier")}
-                                      className="h-5 w-5 flex items-center justify-center"
-                                    >
-                                      {cp.available ? (
-                                        <Eye size={13} className="text-shklet-green" />
-                                      ) : (
-                                        <EyeOff size={13} className="text-[var(--muted-soft)]" />
-                                      )}
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-
-                        {item.modifierGroups.length > 0 && (
-                          <p className="mt-2.5 flex items-center gap-1 text-[11px] font-semibold text-[var(--muted)]">
-                            <Sparkles size={11} /> {item.modifierGroups.length} {t("menu.modifiers").toLowerCase()}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                    {cat.items.length === 0 && (
-                      <p className="text-sm text-[var(--muted)] col-span-full py-6 text-center">
-                        {t("common.noResultsFound")}
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {cat.items.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`rounded-xl border border-black/5 dark:border-white/5 p-3 flex items-start justify-between gap-2 ${
+                      item.available ? "" : "opacity-50"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <p className="font-bold truncate flex items-center gap-1.5">
+                        {item.name}
+                        {!item.available && <EyeOff size={14} className="opacity-60" />}
                       </p>
-                    )}
+                      <p className="text-sm text-leaf font-bold">{iqd(item.price)}</p>
+                      {item.description && (
+                        <p className="text-xs opacity-60 truncate">{item.description}</p>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-1 shrink-0">
+                      <button
+                        className="btn-ghost size-8 rounded-lg"
+                        onClick={() => setItemModal({ open: true, item, categoryId: cat.id })}
+                        title={t("common.edit")}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        className="btn-ghost size-8 rounded-lg"
+                        onClick={() => toggleAvailable(item)}
+                        title={item.available ? t("menu.item.hideFromPos") : t("menu.item.showOnPos")}
+                      >
+                        <EyeOff size={14} />
+                      </button>
+                      <button
+                        className="btn-ghost size-8 rounded-lg text-red-500"
+                        onClick={() => deleteItem(item)}
+                        title={t("common.delete")}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
-                </CardContent>
-              </Card>
-            </motion.div>
+                ))}
+
+                <button
+                  className="rounded-xl border-2 border-dashed border-black/10 dark:border-white/10 p-3 flex items-center justify-center gap-2 font-bold opacity-70 hover:opacity-100 hover:border-leaf min-h-[72px]"
+                  onClick={() => setItemModal({ open: true, categoryId: cat.id })}
+                >
+                  <Plus size={18} /> {t("menu.item.addItem")}
+                </button>
+              </div>
+            </section>
           ))}
         </div>
       )}
 
-      <Modal
-        open={newCategoryOpen}
-        onClose={() => setNewCategoryOpen(false)}
-        title={t("menu.addCategory")}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setNewCategoryOpen(false)}>
-              {t("common.cancel")}
-            </Button>
-            <Button onClick={createCategory}>{t("common.save")}</Button>
-          </>
-        }
-      >
-        <div className="space-y-3 pb-2">
-          <div>
-            <Label>Name (English)</Label>
-            <Input value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} />
-          </div>
-          <div>
-            <Label>ناو (کوردی)</Label>
-            <Input dir="rtl" value={newCategoryNameKu} onChange={(e) => setNewCategoryNameKu(e.target.value)} />
-          </div>
-        </div>
-      </Modal>
-
-      {showItemForm && editingCategoryId && (
-        <ItemFormModal
-          categoryId={editingCategoryId}
-          item={editingItem}
-          cities={cities}
-          onClose={() => setShowItemForm(false)}
+      {catModal.open && (
+        <CategoryModal
+          cat={catModal.cat}
+          onClose={() => setCatModal({ open: false })}
           onSaved={() => {
-            setShowItemForm(false);
-            load();
+            setCatModal({ open: false });
+            reload();
           }}
         />
       )}
-    </div>
+
+      {itemModal.open && (
+        <ItemModal
+          item={itemModal.item}
+          categoryId={itemModal.categoryId!}
+          categories={categories}
+          onClose={() => setItemModal({ open: false })}
+          onSaved={() => {
+            setItemModal({ open: false });
+            reload();
+          }}
+        />
+      )}
+    </>
   );
 }
 
-function ItemFormModal({
-  categoryId,
-  item,
-  cities,
+function CategoryModal({
+  cat,
   onClose,
   onSaved,
 }: {
-  categoryId: string;
-  item: MenuItem | null;
-  cities: City[];
+  cat?: Category;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { t } = useLanguage();
-  const [name, setName] = useState(item?.name ?? "");
-  const [nameKu, setNameKu] = useState(item?.nameKu ?? "");
-  const [description, setDescription] = useState(item?.description ?? "");
-  const [prices, setPrices] = useState<Record<string, { price: string; available: boolean }>>(
-    () => {
-      const init: Record<string, { price: string; available: boolean }> = {};
-      for (const city of cities) {
-        const existing = item?.cityPrices.find((p) => p.cityId === city.id);
-        init[city.id] = {
-          price: existing ? String(existing.price) : "",
-          available: existing?.available ?? true,
-        };
-      }
-      return init;
-    },
-  );
-  const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>(
-    item?.modifierGroups.map((g) => ({ ...g, options: g.options.map((o) => ({ ...o })) })) ?? [],
-  );
+  const [name, setName] = useState(cat?.name ?? "");
   const [saving, setSaving] = useState(false);
+  const toast = useToast();
+  const { t } = useLanguage();
 
-  function addModifierGroup() {
-    setModifierGroups((prev) => [
-      ...prev,
-      {
-        id: `tmp-${Date.now()}`,
-        name: "",
-        nameKu: "",
-        required: false,
-        options: [],
-      },
-    ]);
-  }
-
-  function addOption(groupIdx: number) {
-    setModifierGroups((prev) =>
-      prev.map((g, i) =>
-        i === groupIdx
-          ? {
-              ...g,
-              options: [
-                ...g.options,
-                { id: `tmp-${Date.now()}`, name: "", nameKu: "", extraPrice: 0 },
-              ],
-            }
-          : g,
-      ),
-    );
-  }
-
-  async function handleSave() {
+  async function save() {
     setSaving(true);
-    const cityPrices = cities
-      .map((city) => ({
-        cityId: city.id,
-        price: Number(prices[city.id]?.price || 0),
-        available: prices[city.id]?.available ?? true,
-      }))
-      .filter((cp) => cp.price > 0);
-
-    const payload = {
-      categoryId,
-      name,
-      nameKu,
-      description: description || undefined,
-      basePrice: cityPrices[0]?.price ?? 0,
-      cityPrices,
-      modifierGroups: modifierGroups.map((g) => ({
-        name: g.name,
-        nameKu: g.nameKu,
-        required: g.required,
-        options: g.options.map((o) => ({
-          name: o.name,
-          nameKu: o.nameKu,
-          extraPrice: o.extraPrice,
-        })),
-      })),
-    };
-
-    const res = item
-      ? await fetch(`/api/menu/items/${item.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        })
-      : await fetch("/api/menu/items", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-    setSaving(false);
-    if (res.ok) {
-      toast.success(t("menu.itemSaved"));
+    try {
+      if (cat) await apiSend(`/api/menu/categories/${cat.id}`, "PATCH", { name });
+      else await apiSend("/api/menu/categories", "POST", { name });
+      toast.show(t("menu.toast.categorySaved"));
       onSaved();
-    } else {
-      toast.error(t("common.somethingWentWrong"));
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : t("common.failed"), "error");
+      setSaving(false);
     }
   }
 
   return (
-    <Modal
-      open
-      onClose={onClose}
-      title={item ? t("common.edit") : t("menu.addItem")}
-      size="lg"
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button onClick={handleSave} loading={saving}>
-            {t("common.save")}
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-4 pb-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label>{t("menu.itemName")} (EN)</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <div>
-            <Label>{t("menu.itemName")} (KU)</Label>
-            <Input dir="rtl" value={nameKu} onChange={(e) => setNameKu(e.target.value)} />
-          </div>
-        </div>
-        <div>
-          <Label>{t("menu.descriptionOptional")}</Label>
-          <Input value={description} onChange={(e) => setDescription(e.target.value)} />
-        </div>
+    <Modal open onClose={onClose} title={cat ? t("menu.categoryModal.rename") : t("menu.categoryModal.new")}>
+      <label className="label">{t("common.name")}</label>
+      <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+      <div className="flex gap-2 mt-5">
+        <button className="btn-ghost flex-1 py-2.5" onClick={onClose}>
+          {t("common.cancel")}
+        </button>
+        <button className="btn-primary flex-1 py-2.5" onClick={save} disabled={saving || !name.trim()}>
+          {t("common.save")}
+        </button>
+      </div>
+    </Modal>
+  );
+}
 
+function ItemModal({
+  item,
+  categoryId,
+  categories,
+  onClose,
+  onSaved,
+}: {
+  item?: MenuItem;
+  categoryId: string;
+  categories: Category[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(item?.name ?? "");
+  const [price, setPrice] = useState(item?.price?.toString() ?? "");
+  const [description, setDescription] = useState(item?.description ?? "");
+  const [catId, setCatId] = useState(item?.categoryId ?? categoryId);
+  const [available, setAvailable] = useState(item?.available ?? true);
+  const [groups, setGroups] = useState<ModifierGroup[]>(parseModifiers(item?.modifiers));
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+  const { t } = useLanguage();
+
+  function addGroup() {
+    setGroups((g) => [...g, { name: "Sauce", required: true, options: [] }]);
+  }
+  function updateGroup(idx: number, patch: Partial<ModifierGroup>) {
+    setGroups((g) => g.map((grp, i) => (i === idx ? { ...grp, ...patch } : grp)));
+  }
+  function removeGroup(idx: number) {
+    setGroups((g) => g.filter((_, i) => i !== idx));
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      // Drop empty groups before saving.
+      const cleanGroups = groups
+        .map((g) => ({ ...g, name: g.name.trim(), options: g.options.filter((o) => o.trim()) }))
+        .filter((g) => g.name && g.options.length);
+      const payload = {
+        name,
+        price,
+        description,
+        categoryId: catId,
+        available,
+        modifiers: cleanGroups,
+      };
+      if (item) await apiSend(`/api/menu/items/${item.id}`, "PATCH", payload);
+      else await apiSend("/api/menu/items", "POST", payload);
+      toast.show(t("menu.toast.itemSaved"));
+      onSaved();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : t("common.failed"), "error");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={item ? t("menu.itemModal.editItem") : t("menu.itemModal.newItem")}>
+      <div className="flex flex-col gap-3">
         <div>
-          <Label>{t("menu.perCityPricing")}</Label>
-          <div className="space-y-2">
-            {cities.map((city) => (
-              <div key={city.id} className="flex items-center gap-2">
-                <span className="w-28 text-sm text-[var(--muted)] shrink-0 font-medium">{city.name}</span>
-                <Input
-                  type="number"
-                  placeholder={t("menu.price")}
-                  value={prices[city.id]?.price ?? ""}
-                  onChange={(e) =>
-                    setPrices((prev) => ({
-                      ...prev,
-                      [city.id]: { ...prev[city.id], price: e.target.value },
-                    }))
-                  }
-                />
-                <label className="flex items-center gap-1.5 text-xs shrink-0 font-medium text-[var(--muted)]">
-                  <input
-                    type="checkbox"
-                    checked={prices[city.id]?.available ?? true}
-                    onChange={(e) =>
-                      setPrices((prev) => ({
-                        ...prev,
-                        [city.id]: { ...prev[city.id], available: e.target.checked },
-                      }))
-                    }
-                  />
-                  {t("menu.available")}
-                </label>
-              </div>
+          <label className="label">{t("common.name")}</label>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </div>
+        <div>
+          <label className="label">{t("menu.itemModal.price")}</label>
+          <input
+            className="input"
+            type="number"
+            inputMode="numeric"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="label">{t("common.category")}</label>
+          <select className="input" value={catId} onChange={(e) => setCatId(e.target.value)}>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
             ))}
-          </div>
+          </select>
         </div>
-
         <div>
+          <label className="label">{t("menu.itemModal.descriptionOptional")}</label>
+          <input
+            className="input"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+        <label className="flex items-center gap-2 font-semibold cursor-pointer">
+          <input
+            type="checkbox"
+            className="size-5 accent-leaf"
+            checked={available}
+            onChange={(e) => setAvailable(e.target.checked)}
+          />
+          {t("menu.itemModal.availableOnPos")}
+        </label>
+
+        {/* Reusable modifiers (e.g. sauce choice). The cashier is prompted to pick
+            one option per group when the item is added to an order. */}
+        <div className="border-t border-black/5 dark:border-white/5 pt-3">
           <div className="flex items-center justify-between mb-2">
-            <Label className="mb-0">{t("menu.modifiers")}</Label>
-            <Button size="sm" variant="ghost" onClick={addModifierGroup}>
-              <Plus size={14} /> {t("menu.addOptionGroup")}
-            </Button>
+            <span className="label mb-0 flex items-center gap-1.5">
+              <SlidersHorizontal size={15} /> {t("menu.itemModal.modifiers")}
+            </span>
+            <button type="button" onClick={addGroup} className="btn-ghost px-2.5 py-1.5 text-xs">
+              <Plus size={14} /> {t("menu.itemModal.addGroup")}
+            </button>
           </div>
-          <div className="space-y-3">
-            {modifierGroups.map((g, gi) => (
-              <div key={g.id} className="rounded-xl border border-[var(--card-border)] p-3 bg-black/[0.015] dark:bg-white/[0.02]">
-                <div className="flex gap-2">
-                  <Input
-                    placeholder={t("menu.optionGroupNamePlaceholder")}
-                    value={g.name}
-                    onChange={(e) =>
-                      setModifierGroups((prev) =>
-                        prev.map((x, i) => (i === gi ? { ...x, name: e.target.value } : x)),
-                      )
-                    }
-                  />
-                  <Input
-                    dir="rtl"
-                    placeholder="ناوی کوردی"
-                    value={g.nameKu}
-                    onChange={(e) =>
-                      setModifierGroups((prev) =>
-                        prev.map((x, i) => (i === gi ? { ...x, nameKu: e.target.value } : x)),
-                      )
-                    }
-                  />
-                </div>
-                <label className="flex items-center gap-1.5 text-xs font-medium text-[var(--muted)] mt-2.5">
+          {groups.length === 0 ? (
+            <p className="text-xs opacity-50">{t("menu.itemModal.noModifiers")}</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {groups.map((g, idx) => (
+                <div key={idx} className="rounded-xl border border-black/10 dark:border-white/10 p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      className="input py-1.5 flex-1"
+                      placeholder={t("menu.itemModal.groupNamePlaceholder")}
+                      value={g.name}
+                      onChange={(e) => updateGroup(idx, { name: e.target.value })}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeGroup(idx)}
+                      className="btn-ghost size-8 rounded-lg text-red-500"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                   <input
-                    type="checkbox"
-                    checked={g.required}
+                    className="input py-1.5"
+                    placeholder={t("menu.itemModal.optionsPlaceholder")}
+                    value={g.options.join(", ")}
                     onChange={(e) =>
-                      setModifierGroups((prev) =>
-                        prev.map((x, i) => (i === gi ? { ...x, required: e.target.checked } : x)),
-                      )
+                      updateGroup(idx, { options: e.target.value.split(",").map((o) => o.trim()) })
                     }
                   />
-                  {t("menu.required")}
-                </label>
-
-                <div className="mt-2.5 space-y-1.5">
-                  {g.options.map((o, oi) => (
-                    <div key={o.id} className="flex gap-1.5 items-center">
-                      <Input
-                        className="text-xs h-8"
-                        placeholder={t("menu.optionName")}
-                        value={o.name}
-                        onChange={(e) =>
-                          setModifierGroups((prev) =>
-                            prev.map((x, i) =>
-                              i === gi
-                                ? {
-                                    ...x,
-                                    options: x.options.map((y, oi2) =>
-                                      oi2 === oi ? { ...y, name: e.target.value } : y,
-                                    ),
-                                  }
-                                : x,
-                            ),
-                          )
-                        }
-                      />
-                      <Input
-                        className="text-xs h-8 w-24"
-                        type="number"
-                        placeholder={t("menu.extraPriceOptional")}
-                        value={o.extraPrice}
-                        onChange={(e) =>
-                          setModifierGroups((prev) =>
-                            prev.map((x, i) =>
-                              i === gi
-                                ? {
-                                    ...x,
-                                    options: x.options.map((y, oi2) =>
-                                      oi2 === oi
-                                        ? { ...y, extraPrice: Number(e.target.value) }
-                                        : y,
-                                    ),
-                                  }
-                                : x,
-                            ),
-                          )
-                        }
-                      />
-                    </div>
-                  ))}
-                  <Button size="sm" variant="ghost" onClick={() => addOption(gi)}>
-                    <Plus size={12} /> {t("menu.addOption")}
-                  </Button>
+                  <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer mt-2">
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-leaf"
+                      checked={g.required}
+                      onChange={(e) => updateGroup(idx, { required: e.target.checked })}
+                    />
+                    {t("common.required")}
+                  </label>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
+      </div>
+      <div className="flex gap-2 mt-5">
+        <button className="btn-ghost flex-1 py-2.5" onClick={onClose}>
+          {t("common.cancel")}
+        </button>
+        <button
+          className="btn-primary flex-1 py-2.5"
+          onClick={save}
+          disabled={saving || !name.trim() || !price}
+        >
+          {t("common.save")}
+        </button>
       </div>
     </Modal>
   );

@@ -1,56 +1,57 @@
-import type { Metadata } from "next";
-import { Plus_Jakarta_Sans, Noto_Kufi_Arabic } from "next/font/google";
+import type { Metadata, Viewport } from "next";
+import { sirwan } from "@/lib/fonts";
+import { ToastProvider } from "@/components/Toast";
+import { LanguageProvider } from "@/lib/i18n/LanguageContext";
 import "./globals.css";
-import { LanguageProvider } from "@/i18n";
-import { ThemeProvider } from "@/components/theme-provider";
-import { Toaster } from "@/components/toaster";
-import { noFlashScript } from "@/lib/no-flash-script";
-
-// Fallback typefaces until the real brand fonts (AMSI PRO, UniSIRWAN Ping)
-// are sourced and licensed — see README "Fonts". Chosen to be geometric,
-// modern, and high-contrast at small sizes so the interim look is still
-// premium, not a generic system-ui default.
-const jakarta = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  variable: "--font-amsi-fallback",
-  display: "swap",
-});
-
-const notoKufi = Noto_Kufi_Arabic({
-  subsets: ["arabic"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-sirwan-fallback",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
-  title: "Shklet POS",
-  description: "Shklet Kiosk — Sales & Management System",
+  title: "Shklet — POS & Management",
+  description: "Sales & Management System for Shklet",
+  // PWA: lets the site be installed and launched in standalone mode.
+  manifest: "/manifest.json",
+  applicationName: "Shklet POS",
+  appleWebApp: {
+    capable: true,
+    title: "Shklet POS",
+    statusBarStyle: "default",
+  },
+  // Android Chrome's generic standalone hint (Next doesn't emit this on its own).
+  other: {
+    "mobile-web-app-capable": "yes",
+  },
+  icons: {
+    icon: [
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export const viewport: Viewport = {
+  width: "device-width",
+  // Scaled down so the UI is compact on the 11" tablet. userScalable:false +
+  // maximumScale:1 disable pinch/double-tap zoom so a double-tap on a product
+  // card registers as two taps (add 2), never a zoom gesture.
+  initialScale: 0.75,
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: "#EC2231",
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html
-      lang="en"
-      dir="ltr"
-      className={`${jakarta.variable} ${notoKufi.variable} h-full antialiased`}
-      suppressHydrationWarning
-    >
-      <head>
-        {/* eslint-disable-next-line @next/next/no-sync-scripts */}
-        <script dangerouslySetInnerHTML={{ __html: noFlashScript }} />
-      </head>
-      <body className="min-h-full flex flex-col bg-shklet-cream" suppressHydrationWarning>
-        <ThemeProvider>
-          <LanguageProvider>
-            {children}
-            <Toaster />
-          </LanguageProvider>
-        </ThemeProvider>
+    <html lang="en" className={sirwan.variable} suppressHydrationWarning>
+      <body className="font-sans antialiased min-h-screen">
+        {/* Apply saved theme before paint to avoid a flash. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{if(localStorage.theme==='dark'||(!('theme'in localStorage)&&matchMedia('(prefers-color-scheme:dark)').matches)){document.documentElement.classList.add('dark')}}catch(e){}`,
+          }}
+        />
+        <LanguageProvider>
+          <ToastProvider>{children}</ToastProvider>
+        </LanguageProvider>
       </body>
     </html>
   );

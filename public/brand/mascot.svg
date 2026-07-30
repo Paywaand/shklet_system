@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">
+  <!-- Shklet mascot — kawaii dumpling.
+       Two passes: pass 1 draws every body shape with a fat red stroke to build
+       the union outline; pass 2 refills the same shapes in cream so interior
+       overlap lines disappear. Face goes on top. -->
+  <defs>
+    <g id="body">
+      <!-- main body: tilted egg / strawberry shape, fuller top-right -->
+      <path d="M 430 945
+               C 300 880 195 730 210 555
+               C 222 420 300 320 430 300
+               C 585 278 760 330 830 470
+               C 895 600 850 760 720 865
+               C 620 942 510 975 430 945 Z"/>
+      <!-- pleats fanning at the top (dumpling folds) -->
+      <ellipse cx="415" cy="330" rx="72" ry="118" transform="rotate(-38 415 330)"/>
+      <ellipse cx="545" cy="285" rx="70" ry="125" transform="rotate(-12 545 285)"/>
+      <ellipse cx="672" cy="295" rx="68" ry="120" transform="rotate(12 672 295)"/>
+      <ellipse cx="788" cy="360" rx="62" ry="105" transform="rotate(38 788 360)"/>
+      <!-- little curl on the right side -->
+      <ellipse cx="878" cy="480" rx="48" ry="80" transform="rotate(62 878 480)"/>
+    </g>
+  </defs>
+
+  <!-- pass 1: red silhouette (outline) -->
+  <use href="#body" fill="#EC2231" stroke="#EC2231" stroke-width="72" stroke-linejoin="round"/>
+  <!-- pass 2: cream interior -->
+  <use href="#body" fill="#F2E8DC"/>
+
+  <!-- face -->
+  <g>
+    <!-- eyes -->
+    <ellipse cx="425" cy="600" rx="62" ry="78" fill="#0D0D0D" transform="rotate(-6 425 600)"/>
+    <ellipse cx="648" cy="620" rx="62" ry="78" fill="#0D0D0D" transform="rotate(6 648 620)"/>
+    <circle cx="405" cy="572" r="24" fill="#fff"/>
+    <circle cx="448" cy="618" r="10" fill="#fff"/>
+    <circle cx="628" cy="592" r="24" fill="#fff"/>
+    <circle cx="671" cy="638" r="10" fill="#fff"/>
+    <!-- smile -->
+    <path d="M 495 705 Q 537 748 580 700" fill="none" stroke="#0D0D0D" stroke-width="20" stroke-linecap="round"/>
+    <!-- cheeks -->
+    <ellipse cx="322" cy="722" rx="34" ry="52" fill="#F4A0B5" transform="rotate(-18 322 722)"/>
+    <ellipse cx="742" cy="760" rx="34" ry="52" fill="#F4A0B5" transform="rotate(18 742 760)"/>
+  </g>
+</svg>

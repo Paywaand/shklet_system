@@ -1,90 +1,49 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireRole, logAudit } from "@/lib/auth";
-import { withApiError, safeJson } from "@/lib/api";
+import { authorize, audit } from "@/lib/guard";
+import { activeBranch } from "@/lib/branchScope";
+import { ModifiersSchema } from "@/lib/schemas";
 
-interface CityPriceInput {
-  cityId: string;
-  price: number;
-  available: boolean;
-}
+export async function POST(req: Request) {
+  const guard = await authorize("menu.manage");
+  if (!guard.ok) return guard.response;
+  const branch = await activeBranch(guard.session);
 
-interface ModifierOptionInput {
-  name: string;
-  nameKu: string;
-  extraPrice: number;
-}
+  const body = await req.json().catch(() => ({}));
+  const { name, price, categoryId, description, imageUrl, available, modifiers } = body;
 
-interface ModifierGroupInput {
-  name: string;
-  nameKu: string;
-  required: boolean;
-  options: ModifierOptionInput[];
-}
+  if (!name?.trim()) return NextResponse.json({ error: "Name is required" }, { status: 400 });
+  if (!categoryId) return NextResponse.json({ error: "Category is required" }, { status: 400 });
+  // The category must belong to the active branch (menus are per-branch).
+  const cat = await prisma.category.findFirst({ where: { id: String(categoryId), branch } });
+  if (!cat) return NextResponse.json({ error: "Category not found" }, { status: 400 });
+  const priceNum = Number(price);
+  if (!Number.isFinite(priceNum) || priceNum < 0)
+    return NextResponse.json({ error: "Valid price is required" }, { status: 400 });
 
-interface CreateItemBody {
-  categoryId: string;
-  name: string;
-  nameKu: string;
-  description?: string;
-  imageUrl?: string;
-  basePrice: number;
-  cityPrices: CityPriceInput[];
-  modifierGroups: ModifierGroupInput[];
-}
+  // Strict validation of the modifiers JSON before it's stored (bounds group /
+  // option counts and string lengths — see lib/schemas.ts).
+  let modifiersJson: string | null = null;
+  if (modifiers !== undefined && modifiers !== null) {
+    const parsed = ModifiersSchema.safeParse(modifiers);
+    if (!parsed.success)
+      return NextResponse.json({ error: "Invalid modifiers" }, { status: 400 });
+    modifiersJson = parsed.data.length ? JSON.stringify(parsed.data) : null;
+  }
 
-/**
- * Menu structure (categories/items/modifiers) is admin-owned globally, but
- * pricing/availability is per-city per module 0/2 — a manager could arguably
- * be allowed to adjust their own city's price, but creating/deleting items
- * outright is kept admin-only to avoid one city's manager silently deleting
- * an item another city depends on.
- */
-export const POST = withApiError(async (req: NextRequest) => {
-  const user = await requireRole("ADMIN");
-  const body = await safeJson<CreateItemBody>(req);
-
-  const maxSort = await prisma.menuItem.aggregate({
-    where: { categoryId: body.categoryId },
-    _max: { sortOrder: true },
-  });
-
+  const count = await prisma.menuItem.count({ where: { categoryId } });
   const item = await prisma.menuItem.create({
     data: {
-      categoryId: body.categoryId,
-      name: body.name,
-      nameKu: body.nameKu,
-      description: body.description,
-      imageUrl: body.imageUrl,
-      basePrice: body.basePrice,
-      sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
-      cityPrices: {
-        create: body.cityPrices.map((cp) => ({
-          cityId: cp.cityId,
-          price: cp.price,
-          available: cp.available,
-        })),
-      },
-      modifierGroups: {
-        create: body.modifierGroups.map((g, gi) => ({
-          name: g.name,
-          nameKu: g.nameKu,
-          required: g.required,
-          sortOrder: gi,
-          options: {
-            create: g.options.map((o, oi) => ({
-              name: o.name,
-              nameKu: o.nameKu,
-              extraPrice: o.extraPrice,
-              sortOrder: oi,
-            })),
-          },
-        })),
-      },
+      name: name.trim(),
+      price: Math.round(priceNum),
+      categoryId,
+      description: description?.trim() || null,
+      imageUrl: imageUrl?.trim() || null,
+      available: available !== false,
+      modifiers: modifiersJson,
+      sortOrder: count,
     },
-    include: { cityPrices: true, modifierGroups: { include: { options: true } } },
   });
-
-  await logAudit(user.id, `created menu item "${body.name}"`, "MenuItem", item.id);
-  return NextResponse.json({ item });
-});
+  await audit(guard.session.sub, `Created item "${item.name}"`);
+  return NextResponse.json({ item }, { status: 201 });
+}

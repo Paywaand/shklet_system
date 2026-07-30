@@ -1,63 +1,84 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireRole } from "@/lib/auth";
-import { withApiError } from "@/lib/api";
+import { authorize } from "@/lib/guard";
+import { activeBranch } from "@/lib/branchScope";
+import { shapeRecipe } from "@/lib/production";
+import type { EstimatedProfitRow } from "@/lib/types";
 
-/**
- * Estimated Profit (module 7) — projected margins from recipes × units sold,
- * fully isolated from real expenses/financials. Admin only (exposes recipe
- * cost data).
- */
-export const GET = withApiError(async (req: NextRequest) => {
-  await requireRole("ADMIN");
-  const { searchParams } = new URL(req.url);
-  const from = searchParams.get("from");
-  const to = searchParams.get("to");
+// GET /api/estimated-profit?days=1|7|30
+//
+// estimated_net = Σ(units_sold × gross_profit_per_item)
+// where gross_profit_per_item comes from each item's Recipe BOM.
+//
+// ISOLATED from actual financials: this reads only orders + recipes. It never
+// touches expenses or recorded warehouse-usage costs. It is an ESTIMATE.
+export async function GET(req: Request) {
+  const guard = await authorize("estimated.view");
+  if (!guard.ok) return guard.response;
+  const branch = await activeBranch(guard.session);
 
-  const dateWhere =
-    from || to
-      ? { placedAt: { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } }
-      : {};
+  const raw = Number(new URL(req.url).searchParams.get("days"));
+  const days: 1 | 7 | 30 = raw === 7 ? 7 : raw === 30 ? 30 : 1;
+  const from = new Date();
+  from.setDate(from.getDate() - days);
 
-  const orders = await prisma.order.findMany({
-    where: { ...dateWhere, status: { not: "CANCELLED" } },
-    include: { items: true },
-  });
+  const [orderItems, recipes] = await Promise.all([
+    prisma.orderItem.findMany({
+      where: { order: { branch, placedAt: { gte: from } } },
+      select: { name: true, quantity: true },
+    }),
+    prisma.recipe.findMany({
+      where: { menuItem: { category: { branch } } },
+      include: {
+        menuItem: { select: { name: true, price: true } },
+        ingredients: { include: { inventoryItem: { select: { unit: true, lastUnitCost: true } } } },
+      },
+    }),
+  ]);
 
-  const revenue = orders.reduce((sum, o) => sum + o.total, 0);
-
-  const unitsSold = new Map<string, number>();
-  for (const order of orders) {
-    for (const item of order.items) {
-      if (!item.menuItemId) continue;
-      unitsSold.set(item.menuItemId, (unitsSold.get(item.menuItemId) ?? 0) + item.quantity);
-    }
+  // units sold per menu-item name (OrderItem.name is the item-name snapshot)
+  const soldByName = new Map<string, number>();
+  for (const oi of orderItems) {
+    soldByName.set(oi.name, (soldByName.get(oi.name) ?? 0) + oi.quantity);
   }
 
-  const recipes = await prisma.recipe.findMany({
-    include: { lines: { include: { warehouseItem: true, batch: true } } },
-  });
-
-  let ingredientCost = 0;
-  for (const recipe of recipes) {
-    const sold = unitsSold.get(recipe.menuItemId) ?? 0;
-    if (sold === 0) continue;
-    for (const line of recipe.lines) {
-      let unitCost = 0;
-      if (line.sourceType === "WAREHOUSE_ITEM" && line.warehouseItem) unitCost = Number(line.warehouseItem.unitCost);
-      else if (line.sourceType === "BATCH" && line.batch) unitCost = Number(line.batch.costPerUnit);
-      else if (line.sourceType === "MANUAL") unitCost = Number(line.manualCost ?? 0);
-      ingredientCost += unitCost * Number(line.amountPerServing) * sold;
-    }
+  // gross profit per item from the BOM (with live warehouse costs)
+  const gpByName = new Map<string, { menuItemId: string; gp: number }>();
+  for (const r of recipes) {
+    const shaped = shapeRecipe(r);
+    gpByName.set(shaped.menuItemName, { menuItemId: shaped.menuItemId, gp: shaped.grossProfit });
   }
 
-  const grossProfit = revenue - ingredientCost;
-  const margin = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
+  // Build a row for every item with a recipe OR that was sold in the window.
+  const names = new Set<string>([...gpByName.keys(), ...soldByName.keys()]);
+  const rows: EstimatedProfitRow[] = [];
+  for (const name of names) {
+    const unitsSold = soldByName.get(name) ?? 0;
+    const recipe = gpByName.get(name);
+    const hasRecipe = !!recipe;
+    const grossProfitPerItem = recipe?.gp ?? 0;
+    rows.push({
+      menuItemId: recipe?.menuItemId ?? name,
+      name,
+      unitsSold,
+      grossProfitPerItem,
+      estimated: hasRecipe ? unitsSold * grossProfitPerItem : 0,
+      hasRecipe,
+    });
+  }
+  rows.sort((a, b) => b.estimated - a.estimated || b.unitsSold - a.unitsSold);
+
+  const estimatedNet = rows.reduce((s, r) => s + r.estimated, 0);
+  const unitsSold = rows.reduce((s, r) => s + r.unitsSold, 0);
+  const itemsWithRecipe = rows.filter((r) => r.hasRecipe).length;
+  const itemsMissingRecipe = rows.filter((r) => !r.hasRecipe && r.unitsSold > 0).length;
 
   return NextResponse.json({
-    estimatedRevenue: revenue,
-    estimatedIngredientCost: Math.round(ingredientCost),
-    estimatedGrossProfit: Math.round(grossProfit),
-    estimatedMargin: Math.round(margin * 10) / 10,
+    days,
+    estimatedNet: Math.round(estimatedNet),
+    unitsSold,
+    itemsWithRecipe,
+    itemsMissingRecipe,
+    rows,
   });
-});
+}

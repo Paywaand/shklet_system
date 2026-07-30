@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
-import { destroySession } from "@/lib/auth";
-import { withApiError } from "@/lib/api";
+import { clearSessionCookie, getSession, revokeSession } from "@/lib/auth";
+import { audit } from "@/lib/guard";
 
-export const POST = withApiError(async () => {
-  await destroySession();
+export async function POST() {
+  const session = await getSession();
+  if (session) {
+    await revokeSession(session.sid); // delete the server-side row → instant revocation
+    await audit(session.sub, "Logged out");
+  }
+  await clearSessionCookie();
   return NextResponse.json({ ok: true });
-});
+}

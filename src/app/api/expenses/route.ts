@@ -1,60 +1,76 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireRole, scopeCityFilter, logAudit } from "@/lib/auth";
-import { withApiError, safeJson } from "@/lib/api";
+import { authorize, audit } from "@/lib/guard";
+import { activeBranch } from "@/lib/branchScope";
 
-export const GET = withApiError(async (req: NextRequest) => {
-  const user = await requireRole("ADMIN", "MANAGER");
-  const { searchParams } = new URL(req.url);
-  const where: Record<string, unknown> = scopeCityFilter(user, searchParams.get("cityId"));
+const CATEGORIES = ["Rent", "Utilities", "Supplies", "Staff", "Other"];
 
-  const from = searchParams.get("from");
-  const to = searchParams.get("to");
+// GET /api/expenses?from=ISO&to=ISO&category=Rent
+export async function GET(req: Request) {
+  const guard = await authorize("expenses.manage");
+  if (!guard.ok) return guard.response;
+  const branch = await activeBranch(guard.session);
+
+  const url = new URL(req.url);
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  const category = url.searchParams.get("category");
+
+  const where: { branch: string; date?: { gte?: Date; lte?: Date }; category?: string } = { branch };
   if (from || to) {
-    where.date = {
-      ...(from ? { gte: new Date(from) } : {}),
-      ...(to ? { lte: new Date(to) } : {}),
-    };
+    where.date = {};
+    if (from) where.date.gte = new Date(from);
+    if (to) where.date.lte = new Date(to);
   }
-  const category = searchParams.get("category");
-  if (category) where.category = category;
+  if (category && category !== "all") where.category = category;
 
   const expenses = await prisma.expense.findMany({
     where,
-    include: { user: { select: { fullName: true } }, city: true, event: { select: { name: true } } },
     orderBy: { date: "desc" },
+    include: { createdBy: { select: { fullName: true } } },
   });
-  return NextResponse.json({ expenses });
-});
+  const total = expenses.reduce((s, e) => s + e.amount, 0);
 
-interface CreateExpenseBody {
-  cityId: string;
-  category: "RENT" | "UTILITIES" | "SUPPLIES" | "STAFF" | "OTHER";
-  amount: number;
-  description?: string;
-  date: string;
-  eventId?: string;
+  return NextResponse.json({ expenses, total, categories: CATEGORIES });
 }
 
-export const POST = withApiError(async (req: NextRequest) => {
-  const user = await requireRole("ADMIN", "MANAGER");
-  const body = await safeJson<CreateExpenseBody>(req);
+// POST /api/expenses
+export async function POST(req: Request) {
+  const guard = await authorize("expenses.manage");
+  if (!guard.ok) return guard.response;
+  const branch = await activeBranch(guard.session);
 
-  if (user.role === "MANAGER" && body.cityId !== user.cityId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const body = await req.json().catch(() => ({}));
+  const amount = Math.round(Number(body.amount));
+  const category = body.category;
+  if (!CATEGORIES.includes(category))
+    return NextResponse.json({ error: "Invalid category" }, { status: 400 });
+  if (!Number.isFinite(amount) || amount <= 0)
+    return NextResponse.json({ error: "Enter a valid amount" }, { status: 400 });
+
+  // Cash source is an admin-only choice (manager vs safe); managers' expenses are
+  // always "manager". Defaults to "manager".
+  const source =
+    guard.session.role === "admin" && body.source === "safe" ? "safe" : "manager";
+
+  // An event link must belong to the same branch.
+  if (body.eventId) {
+    const ev = await prisma.event.findFirst({ where: { id: String(body.eventId), branch } });
+    if (!ev) return NextResponse.json({ error: "Event not found" }, { status: 400 });
   }
 
   const expense = await prisma.expense.create({
     data: {
-      cityId: body.cityId,
-      category: body.category,
-      amount: body.amount,
-      description: body.description,
-      date: new Date(body.date),
-      eventId: body.eventId,
-      userId: user.id,
+      amount,
+      branch,
+      category,
+      source,
+      description: body.description?.trim() || null,
+      date: body.date ? new Date(body.date) : new Date(),
+      createdById: guard.session.sub,
+      eventId: body.eventId || null, // "Linked to": null = the branch itself
     },
   });
-  await logAudit(user.id, `logged expense of ${body.amount} (${body.category})`, "Expense", expense.id);
-  return NextResponse.json({ expense });
-});
+  await audit(guard.session.sub, `Added expense ${amount} IQD (${category}, from ${source})`);
+  return NextResponse.json({ expense }, { status: 201 });
+}

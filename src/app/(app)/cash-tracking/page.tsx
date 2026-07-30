@@ -1,328 +1,607 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { motion } from "framer-motion";
-import { useLanguage } from "@/i18n";
-import { useCurrentUser } from "@/hooks/use-current-user";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input, Label, Select } from "@/components/ui/input";
-import { Modal } from "@/components/ui/modal";
-import { PageHeader } from "@/components/ui/page-header";
-import { StatCard } from "@/components/ui/stat-card";
-import { EmptyState } from "@/components/ui/empty-state";
-import { formatMoney } from "@/lib/money";
-import { formatDate } from "@/lib/datetime";
-import toast from "react-hot-toast";
-import { Plus, Wallet, Lock, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Lock, Trash2, Plus, ArrowUpFromLine, Users, History } from "lucide-react";
+import { useFetch, apiSend } from "@/lib/client";
+import { iqd, shortDate, localMonthKey, monthLabel } from "@/lib/format";
+import type { CashTracking, CashLogEntry, WithdrawalLogEntry } from "@/lib/types";
+import { WITHDRAWAL_SOURCES, type WithdrawalSource } from "@/lib/cash";
+import { useSession } from "@/lib/session";
+import { useToast } from "@/components/Toast";
+import { PageHeader } from "@/components/PageHeader";
+import { Loading, ErrorState, Modal } from "@/components/ui";
 
-interface Deposit {
-  id: string;
-  amount: number;
-  date: string;
-  note: string | null;
-  user: { fullName: string };
-}
-interface Withdrawal {
-  id: string;
-  amount: number;
-  source: "SAFE" | "MANAGER";
-  recipientName: string;
-  date: string;
-  note: string | null;
-  user: { fullName: string };
-}
-
+// Admin-only Cash Tracking — moved off the Sales (Analytics) page into its own
+// section. "Expected Cash on Hand" stays on the Sales page; this page holds the
+// safe ledger + withdrawals (manager-holds reconciliation), which is admin-only.
 export default function CashTrackingPage() {
-  const { t } = useLanguage();
-  const { user } = useCurrentUser();
-  const [deposits, setDeposits] = useState<Deposit[]>([]);
-  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
-  const [summary, setSummary] = useState<{
-    safeBalance: number;
-    managerHolds: number;
-    withdrawalTotalsByPerson: { name: string; total: number }[];
-  } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [showDepositForm, setShowDepositForm] = useState(false);
-  const [showWithdrawalForm, setShowWithdrawalForm] = useState(false);
+  const { user } = useSession();
+  const isAdmin = user.role === "admin";
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [depRes, wRes, sRes] = await Promise.all([
-      fetch("/api/cash-tracking/deposits"),
-      fetch("/api/cash-tracking/withdrawals"),
-      fetch("/api/cash-tracking/summary"),
-    ]);
-    setDeposits((await depRes.json()).deposits ?? []);
-    setWithdrawals((await wRes.json()).withdrawals ?? []);
-    setSummary(await sRes.json());
-    setLoading(false);
-  }, []);
+  // null url → not fetched (non-admins never trigger the request).
+  const { data, loading, error, reload } = useFetch<CashTracking>(
+    isAdmin ? "/api/cash-tracking" : null
+  );
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  if (!isAdmin) {
+    return (
+      <>
+        <PageHeader title="Cash Tracking" subtitle="Safe balance & withdrawals" />
+        <div className="card p-10 text-center">
+          <Lock size={36} className="mx-auto text-corn-600 mb-3" />
+          <p className="font-extrabold text-lg">Admin only</p>
+          <p className="text-sm opacity-60 mt-1">Cash tracking is restricted to administrators.</p>
+        </div>
+      </>
+    );
+  }
 
-  if (loading || !summary) return <div className="skeleton rounded-2xl h-64" />;
+  if (loading) return <Loading />;
+  if (error) return <ErrorState message={error} onRetry={reload} />;
+  if (!data) return null;
 
   return (
-    <div>
-      <PageHeader
-        title={t("cashTracking.header")}
-        actions={
-          <>
-            <Button variant="outline" onClick={() => setShowDepositForm(true)}>
-              <Plus size={16} /> {t("cashTracking.moveCashToSafe")}
-            </Button>
-            <Button onClick={() => setShowWithdrawalForm(true)}>
-              <Plus size={16} /> {t("cashTracking.recordWithdrawal")}
-            </Button>
-          </>
-        }
-      />
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-        <StatCard label={t("cashTracking.managerHolds")} value={formatMoney(summary.managerHolds)} icon={Wallet} tone="red" />
-        <StatCard label={t("cashTracking.safeBalance")} value={formatMoney(summary.safeBalance)} icon={Lock} tone="green" />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card>
-          <CardContent className="pt-5">
-            <h3 className="font-bold mb-3 flex items-center gap-2">
-              <ArrowDownToLine size={16} className="text-shklet-green" /> {t("cashTracking.safeDeposits")}
-            </h3>
-            <div className="space-y-2.5">
-              {deposits.map((d, i) => (
-                <motion.div key={d.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.02 }} className="flex justify-between text-sm border-b border-[var(--card-border-soft)] pb-2.5 last:border-0">
-                  <div>
-                    <p className="ltr-nums font-bold">{formatMoney(d.amount)}</p>
-                    <p className="text-xs text-[var(--muted)]">
-                      {d.user.fullName} · {formatDate(d.date)}
-                    </p>
-                  </div>
-                </motion.div>
-              ))}
-              {deposits.length === 0 && <EmptyState title={t("common.noResultsFound")} className="py-8" />}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-5">
-            <h3 className="font-bold mb-3 flex items-center gap-2">
-              <ArrowUpFromLine size={16} className="text-shklet-red" /> {t("cashTracking.withdrawals")}
-            </h3>
-            <div className="space-y-2.5">
-              {withdrawals.map((w, i) => (
-                <motion.div key={w.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.02 }} className="flex justify-between text-sm border-b border-[var(--card-border-soft)] pb-2.5 last:border-0">
-                  <div>
-                    <p className="font-bold">{w.recipientName}</p>
-                    <p className="text-xs text-[var(--muted)]">
-                      {w.source} · {formatDate(w.date)}
-                    </p>
-                  </div>
-                  <p className="ltr-nums font-bold">{formatMoney(w.amount)}</p>
-                </motion.div>
-              ))}
-              {withdrawals.length === 0 && <EmptyState title={t("common.noResultsFound")} className="py-8" />}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className="mt-4">
-        <CardContent className="pt-5">
-          <h3 className="font-bold mb-3">{t("cashTracking.withdrawalTotalsByPerson")}</h3>
-          <div className="space-y-1.5">
-            {summary.withdrawalTotalsByPerson.map((p) => (
-              <div key={p.name} className="flex justify-between text-sm">
-                <span className="font-medium">{p.name}</span>
-                <span className="ltr-nums font-bold">{formatMoney(p.total)}</span>
-              </div>
-            ))}
-            {summary.withdrawalTotalsByPerson.length === 0 && (
-              <p className="text-sm text-[var(--muted)]">{t("common.noResultsFound")}</p>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      <DepositFormModal
-        open={showDepositForm}
-        userCityId={user?.cityId ?? null}
-        onClose={() => setShowDepositForm(false)}
-        onSaved={() => {
-          setShowDepositForm(false);
-          load();
-        }}
-      />
-      <WithdrawalFormModal
-        open={showWithdrawalForm}
-        userCityId={user?.cityId ?? null}
-        onClose={() => setShowWithdrawalForm(false)}
-        onSaved={() => {
-          setShowWithdrawalForm(false);
-          load();
-        }}
-      />
-    </div>
+    <>
+      <PageHeader title="Cash Tracking" subtitle="Safe balance & withdrawals — admin only" />
+      <CashTrackingSection data={data} onChanged={reload} />
+    </>
   );
 }
 
-function DepositFormModal({
-  open,
-  userCityId,
+// ---- Admin-only Cash Tracking (safe only — adding to safe auto-deducts from manager) ----
+function CashTrackingSection({ data, onChanged }: { data: CashTracking; onChanged: () => void }) {
+  const toast = useToast();
+  const [modal, setModal] = useState(false);
+  const [withdrawOpen, setWithdrawOpen] = useState(false);
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  // Withdrawals view filter: "all" (all-time) or a "YYYY-MM" month key. Only scopes
+  // the Withdrawals summary + log — the Safe/Manager balance cards stay all-time.
+  const [period, setPeriod] = useState<string>("all");
+
+  async function remove(entry: CashLogEntry) {
+    if (!confirm("Delete this entry? This cannot be undone.")) return;
+    try {
+      await apiSend(`/api/cash-tracking/${entry.id}?kind=safe`, "DELETE");
+      toast.show("Entry deleted");
+      onChanged();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+    }
+  }
+
+  async function removeWithdrawal(w: WithdrawalLogEntry) {
+    if (!confirm(`Delete the ${iqd(w.amount)} withdrawal to ${w.recipient}? This returns that cash to the ${w.source}.`))
+      return;
+    try {
+      await apiSend(`/api/cash-tracking/${w.id}?kind=withdrawal`, "DELETE");
+      toast.show("Withdrawal deleted");
+      onChanged();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+    }
+  }
+
+  async function removeAdjustment(entry: CashLogEntry) {
+    if (!confirm("Delete this cash adjustment? This cannot be undone.")) return;
+    try {
+      await apiSend(`/api/cash-tracking/${entry.id}?kind=adjustment`, "DELETE");
+      toast.show("Adjustment deleted");
+      onChanged();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+    }
+  }
+
+  // Distinct months present in the withdrawal log (newest first), for the filter.
+  const availableMonths = useMemo(() => {
+    const keys = new Set(data.withdrawals.map((w) => localMonthKey(w.date)));
+    return Array.from(keys).sort().reverse();
+  }, [data.withdrawals]);
+
+  // Withdrawals scoped to the selected period ("all" or a "YYYY-MM" month).
+  const filteredWithdrawals = useMemo(
+    () =>
+      period === "all"
+        ? data.withdrawals
+        : data.withdrawals.filter((w) => localMonthKey(w.date) === period),
+    [data.withdrawals, period]
+  );
+
+  // Per-person totals (grouped from the actual rows — recipients are free text)
+  // + grand total for the selected period.
+  const periodTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    for (const w of filteredWithdrawals) totals[w.recipient] = (totals[w.recipient] ?? 0) + w.amount;
+    return totals;
+  }, [filteredWithdrawals]);
+
+  const periodTotal = useMemo(
+    () => filteredWithdrawals.reduce((s, w) => s + w.amount, 0),
+    [filteredWithdrawals]
+  );
+  const periodLabel = period === "all" ? "all time" : monthLabel(period);
+
+  return (
+    <section className="card p-5 mb-5 border-corn/40">
+      <div className="flex items-center gap-2 mb-3">
+        <Lock size={18} className="text-corn-600" />
+        <h2 className="text-lg font-extrabold">Cash Tracking</h2>
+        <span className="chip bg-corn/20 text-cocoa text-[11px]">Admin only</span>
+      </div>
+
+      {/* Summary */}
+      <div className="grid sm:grid-cols-2 gap-3 mb-4">
+        <div className="rounded-xl bg-black/[0.03] dark:bg-white/[0.04] p-4">
+          <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">Manager currently holds</p>
+          <p className="text-2xl font-extrabold mt-1">{iqd(data.managerHolds)}</p>
+          <p className="text-xs opacity-50 mt-0.5">
+            Cash sales + historical adjustments − expenses − safe deposits − manager withdrawals
+          </p>
+        </div>
+        <div className="rounded-xl bg-black/[0.03] dark:bg-white/[0.04] p-4">
+          <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">Safe balance</p>
+          <p className="text-2xl font-extrabold mt-1 text-leaf">{iqd(data.safeTotal)}</p>
+          <p className="text-xs opacity-50 mt-0.5">Sum of all safe deposits</p>
+        </div>
+      </div>
+
+      {/* Safe Balance log — only section (adding to safe auto-deducts from manager) */}
+      <div className="rounded-xl border border-black/10 dark:border-white/10 p-3">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="font-bold flex items-center gap-1.5">
+            <Lock size={16} className="text-corn-600" /> Safe Balance
+          </h3>
+          <button className="btn-ghost px-2.5 py-1.5 text-xs" onClick={() => setModal(true)}>
+            <Plus size={14} /> Add to safe
+          </button>
+        </div>
+        <p className="text-xs opacity-60">Current safe total</p>
+        <p className="text-xl font-extrabold mb-2">{iqd(data.safeTotal)}</p>
+        <p className="text-xs opacity-50 mb-2">Adding money to the safe automatically takes it from the manager&apos;s wallet.</p>
+        {data.safeEntries.length === 0 ? (
+          <p className="text-xs opacity-50 py-2">No safe deposits logged yet.</p>
+        ) : (
+          <ul className="flex flex-col divide-y divide-black/5 dark:divide-white/5 max-h-56 overflow-y-auto">
+            {data.safeEntries.map((e) => (
+              <li key={e.id} className="flex items-center gap-2 py-2 text-sm">
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold">{iqd(e.amount)}</p>
+                  <p className="text-xs opacity-60 truncate">
+                    {shortDate(e.date)}
+                    {e.note ? ` — ${e.note}` : ""}
+                  </p>
+                </div>
+                <button
+                  className="btn-ghost size-7 rounded-lg text-red-500 shrink-0"
+                  title="Delete entry"
+                  onClick={() => remove(e)}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Historical cash adjustments — income that never passed through the POS
+          (e.g. pre-system-activation sales) but is real cash the manager holds. */}
+      <div className="rounded-xl border border-black/10 dark:border-white/10 p-3 mt-3">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="font-bold flex items-center gap-1.5">
+            <History size={16} className="text-corn-600" /> Historical Cash Adjustments
+          </h3>
+          <button className="btn-ghost px-2.5 py-1.5 text-xs" onClick={() => setAdjustOpen(true)}>
+            <Plus size={14} /> Add adjustment
+          </button>
+        </div>
+        <p className="text-xs opacity-60">Total credited</p>
+        <p className="text-xl font-extrabold mb-2">{iqd(data.cashAdjustmentsTotal)}</p>
+        <p className="text-xs opacity-50 mb-2">
+          Cash the manager genuinely received but that never went through the POS (e.g. sales
+          from before the system went live) — credited straight to &quot;Manager currently holds&quot;.
+        </p>
+        {data.cashAdjustments.length === 0 ? (
+          <p className="text-xs opacity-50 py-2">No adjustments logged yet.</p>
+        ) : (
+          <ul className="flex flex-col divide-y divide-black/5 dark:divide-white/5 max-h-56 overflow-y-auto">
+            {data.cashAdjustments.map((e) => (
+              <li key={e.id} className="flex items-center gap-2 py-2 text-sm">
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold">{iqd(e.amount)}</p>
+                  <p className="text-xs opacity-60 truncate">
+                    {shortDate(e.date)}
+                    {e.note ? ` — ${e.note}` : ""}
+                  </p>
+                </div>
+                <button
+                  className="btn-ghost size-7 rounded-lg text-red-500 shrink-0"
+                  title="Delete entry"
+                  onClick={() => removeAdjustment(e)}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Withdrawals — money leaving the business to a named person */}
+      <div className="rounded-xl border border-black/10 dark:border-white/10 p-3 mt-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <h3 className="font-bold flex items-center gap-1.5">
+            <ArrowUpFromLine size={16} className="text-corn-600" /> Withdrawals
+          </h3>
+          <div className="flex items-center gap-2">
+            {/* Month / all-time filter (scopes the summary + log below only) */}
+            <select
+              value={period}
+              onChange={(e) => setPeriod(e.target.value)}
+              className="input py-1.5 text-xs w-auto"
+              aria-label="Filter withdrawals by month"
+            >
+              <option value="all">All time</option>
+              {availableMonths.map((m) => (
+                <option key={m} value={m}>
+                  {monthLabel(m)}
+                </option>
+              ))}
+            </select>
+            <button className="btn-ghost px-2.5 py-1.5 text-xs" onClick={() => setWithdrawOpen(true)}>
+              <ArrowUpFromLine size={14} /> Withdraw
+            </button>
+          </div>
+        </div>
+
+        {/* Period total */}
+        <div className="rounded-lg bg-corn/10 px-3 py-2 mb-3 flex items-baseline justify-between">
+          <span className="text-xs opacity-70">Total withdrawn ({periodLabel})</span>
+          <span className="font-extrabold">{iqd(periodTotal)}</span>
+        </div>
+
+        {/* By-person summary — grouped from the recorded withdrawals */}
+        {Object.keys(periodTotals).length > 0 && (
+          <>
+            <div className="flex items-center gap-1.5 mb-1.5 text-xs opacity-60">
+              <Users size={13} /> Withdrawals by person ({periodLabel})
+            </div>
+            <ul className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
+              {Object.entries(periodTotals)
+                .sort((a, b) => b[1] - a[1])
+                .map(([name, totalAmt]) => (
+                  <li key={name} className="rounded-lg bg-black/[0.03] dark:bg-white/[0.04] px-3 py-2">
+                    <p className="text-xs opacity-60 truncate">{name}</p>
+                    <p className="font-extrabold text-sm">{iqd(totalAmt)}</p>
+                  </li>
+                ))}
+            </ul>
+          </>
+        )}
+
+        {/* Chronological log (selected period) */}
+        {filteredWithdrawals.length === 0 ? (
+          <p className="text-xs opacity-50 py-2">
+            {data.withdrawals.length === 0
+              ? "No withdrawals logged yet."
+              : `No withdrawals in ${periodLabel}.`}
+          </p>
+        ) : (
+          <ul className="flex flex-col divide-y divide-black/5 dark:divide-white/5 max-h-56 overflow-y-auto">
+            {filteredWithdrawals.map((w) => (
+              <li key={w.id} className="flex items-center gap-2 py-2 text-sm">
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold">
+                    {iqd(w.amount)}{" "}
+                    <span className="font-semibold opacity-70">→ {w.recipient}</span>
+                  </p>
+                  <p className="text-xs opacity-60 truncate">
+                    {shortDate(w.date)}
+                    <span
+                      className={
+                        "ml-1.5 chip text-[10px] " +
+                        (w.source === "safe"
+                          ? "bg-leaf/20 text-leaf"
+                          : "bg-corn/20 text-cocoa")
+                      }
+                    >
+                      from {w.source}
+                    </span>
+                    {w.note ? ` — ${w.note}` : ""}
+                  </p>
+                </div>
+                <button
+                  className="btn-ghost size-7 rounded-lg text-red-500 shrink-0"
+                  title="Delete withdrawal"
+                  onClick={() => removeWithdrawal(w)}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {modal && (
+        <SafeDepositModal
+          onClose={() => setModal(false)}
+          onSaved={() => {
+            setModal(false);
+            onChanged();
+          }}
+        />
+      )}
+
+      {withdrawOpen && (
+        <WithdrawModal
+          safeTotal={data.safeTotal}
+          managerHolds={data.managerHolds}
+          onClose={() => setWithdrawOpen(false)}
+          onSaved={() => {
+            setWithdrawOpen(false);
+            onChanged();
+          }}
+        />
+      )}
+
+      {adjustOpen && (
+        <CashAdjustmentModal
+          onClose={() => setAdjustOpen(false)}
+          onSaved={() => {
+            setAdjustOpen(false);
+            onChanged();
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+// Credit historical cash that never passed through the POS (e.g. sales from
+// before the system went live) straight to "Manager currently holds".
+function CashAdjustmentModal({
   onClose,
   onSaved,
 }: {
-  open: boolean;
-  userCityId: string | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { t } = useLanguage();
-  const [amount, setAmount] = useState("");
+  const toast = useToast();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function save() {
     setSaving(true);
-    const res = await fetch("/api/cash-tracking/deposits", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cityId: userCityId, amount: Number(amount), date, note: note || undefined }),
-    });
-    setSaving(false);
-    if (res.ok) {
-      toast.success(t("common.success"));
+    try {
+      await apiSend("/api/cash-tracking", "POST", { kind: "adjustment", date, amount, note });
+      toast.show("Cash adjustment added");
       onSaved();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+      setSaving(false);
     }
   }
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={t("cashTracking.moveCashToSafe")}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button onClick={save} loading={saving}>
-            {t("common.save")}
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-3 pb-2">
+    <Modal open onClose={onClose} title="Add historical cash">
+      <p className="text-sm opacity-70 mb-3">
+        Use this for real cash the manager received outside the POS (e.g. sales from before
+        the system went live) that&apos;s needed to correct &quot;Manager currently holds&quot;.
+      </p>
+      <div className="flex flex-col gap-3">
         <div>
-          <Label>{t("cashTracking.amount")}</Label>
-          <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
+          <label className="label">Date the cash was received</label>
+          <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
         </div>
         <div>
-          <Label>{t("cashTracking.date")}</Label>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <label className="label">Amount (IQD)</label>
+          <input
+            className="input"
+            type="number"
+            inputMode="numeric"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            autoFocus
+          />
         </div>
         <div>
-          <Label>{t("cashTracking.noteOptional")}</Label>
-          <Input value={note} onChange={(e) => setNote(e.target.value)} />
+          <label className="label">Note (optional)</label>
+          <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
+      </div>
+      <div className="flex gap-2 mt-5">
+        <button className="btn-ghost flex-1 py-2.5" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn-primary flex-1 py-2.5" onClick={save} disabled={saving || !amount}>
+          Add
+        </button>
       </div>
     </Modal>
   );
 }
 
-function WithdrawalFormModal({
-  open,
-  userCityId,
+function SafeDepositModal({
   onClose,
   onSaved,
 }: {
-  open: boolean;
-  userCityId: string | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { t } = useLanguage();
-  const [amount, setAmount] = useState("");
-  const [source, setSource] = useState<"SAFE" | "MANAGER">("SAFE");
-  const [recipientName, setRecipientName] = useState("");
+  const toast = useToast();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function save() {
     setSaving(true);
-    const res = await fetch("/api/cash-tracking/withdrawals", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        cityId: userCityId,
-        amount: Number(amount),
-        source,
-        recipientName,
-        date,
-        note: note || undefined,
-      }),
-    });
-    setSaving(false);
-    if (res.ok) {
-      toast.success(t("common.success"));
+    try {
+      await apiSend("/api/cash-tracking", "POST", { kind: "safe", date, amount, note });
+      toast.show("Added to safe (taken from manager)");
       onSaved();
-    } else {
-      const data = await res.json();
-      if (data.error === "EXCEEDS_BALANCE") {
-        toast.error(t("cashTracking.exceedsBalance"));
-      } else {
-        toast.error(t("common.somethingWentWrong"));
-      }
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+      setSaving(false);
     }
   }
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={t("cashTracking.recordWithdrawal")}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button onClick={save} loading={saving}>
-            {t("common.save")}
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-3 pb-2">
+    <Modal open onClose={onClose} title="Add money to safe">
+      <p className="text-sm opacity-70 mb-3">
+        This amount will be automatically deducted from the manager&apos;s wallet.
+      </p>
+      <div className="flex flex-col gap-3">
         <div>
-          <Label>{t("cashTracking.amount")}</Label>
-          <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
+          <label className="label">Date</label>
+          <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
         </div>
         <div>
-          <Label>{t("cashTracking.source")}</Label>
-          <Select value={source} onChange={(e) => setSource(e.target.value as "SAFE" | "MANAGER")}>
-            <option value="SAFE">{t("cashTracking.safe")}</option>
-            <option value="MANAGER">{t("cashTracking.manager")}</option>
-          </Select>
+          <label className="label">Amount (IQD)</label>
+          <input
+            className="input"
+            type="number"
+            inputMode="numeric"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            autoFocus
+          />
         </div>
         <div>
-          <Label>{t("cashTracking.recipient")}</Label>
-          <Input value={recipientName} onChange={(e) => setRecipientName(e.target.value)} />
+          <label className="label">Note (optional)</label>
+          <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
+        </div>
+      </div>
+      <div className="flex gap-2 mt-5">
+        <button className="btn-ghost flex-1 py-2.5" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn-primary flex-1 py-2.5" onClick={save} disabled={saving || !amount}>
+          Add to safe
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// Withdraw cash to a named person, sourced from the Safe or the Manager. The amount
+// is capped at the chosen source's current balance (also enforced server-side).
+function WithdrawModal({
+  safeTotal,
+  managerHolds,
+  onClose,
+  onSaved,
+}: {
+  safeTotal: number;
+  managerHolds: number;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [source, setSource] = useState<WithdrawalSource>("manager");
+  const [recipient, setRecipient] = useState<string>("");
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const available = source === "safe" ? safeTotal : managerHolds;
+  const amountNum = Math.round(Number(amount));
+  const overMax = Number.isFinite(amountNum) && amountNum > available;
+  const valid = Number.isFinite(amountNum) && amountNum > 0 && !overMax && recipient.trim().length > 0;
+
+  async function save() {
+    if (!valid) return;
+    setSaving(true);
+    try {
+      await apiSend("/api/cash-tracking", "POST", {
+        kind: "withdrawal",
+        source,
+        recipient,
+        amount: amountNum,
+        date,
+        note,
+      });
+      toast.show(`Withdrew ${iqd(amountNum)} from ${source} to ${recipient}`);
+      onSaved();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Withdraw cash">
+      <p className="text-sm opacity-70 mb-3">
+        Money leaving the business to a person. Choose where it comes from — the amount
+        can&apos;t exceed that source&apos;s current balance.
+      </p>
+      <div className="flex flex-col gap-3">
+        <div>
+          <label className="label">Source</label>
+          <div className="grid grid-cols-2 gap-2">
+            {WITHDRAWAL_SOURCES.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setSource(s)}
+                className={
+                  "rounded-xl border px-3 py-2 text-sm font-bold capitalize transition " +
+                  (source === s
+                    ? "border-corn bg-corn/15 text-cocoa"
+                    : "border-black/10 dark:border-white/10 opacity-70")
+                }
+              >
+                {s}
+                <span className="block text-[11px] font-semibold opacity-60">
+                  {iqd(s === "safe" ? safeTotal : managerHolds)}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
         <div>
-          <Label>{t("cashTracking.date")}</Label>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <label className="label">Recipient</label>
+          <input
+            className="input"
+            placeholder="Who received the cash?"
+            value={recipient}
+            maxLength={60}
+            onChange={(e) => setRecipient(e.target.value)}
+          />
         </div>
         <div>
-          <Label>{t("cashTracking.noteOptional")}</Label>
-          <Input value={note} onChange={(e) => setNote(e.target.value)} />
+          <label className="label">Amount (IQD)</label>
+          <input
+            className="input"
+            type="number"
+            inputMode="numeric"
+            max={available}
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            autoFocus
+          />
+          <p className={"text-xs mt-1 " + (overMax ? "text-red-500 font-semibold" : "opacity-50")}>
+            {overMax
+              ? `Exceeds the ${source} balance (${iqd(available)} available)`
+              : `Available in ${source}: ${iqd(available)}`}
+          </p>
         </div>
+        <div>
+          <label className="label">Note (optional)</label>
+          <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
+        </div>
+      </div>
+      <div className="flex gap-2 mt-5">
+        <button className="btn-ghost flex-1 py-2.5" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn-primary flex-1 py-2.5" onClick={save} disabled={saving || !valid}>
+          Withdraw
+        </button>
       </div>
     </Modal>
   );

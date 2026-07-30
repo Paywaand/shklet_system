@@ -1,9 +1,9 @@
 node_modules
 .next
 .git
+*.log
 .env
 .env.local
-npm-debug.log
-Dockerfile
-.dockerignore
+prisma/*.db
+prisma/*.db-journal
 README.md

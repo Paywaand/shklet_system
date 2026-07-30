@@ -1,368 +1,417 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { motion } from "framer-motion";
-import { useLanguage } from "@/i18n";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input, Label, Select } from "@/components/ui/input";
-import { Modal } from "@/components/ui/modal";
-import { Badge } from "@/components/ui/badge";
-import { PageHeader } from "@/components/ui/page-header";
-import { StatCard } from "@/components/ui/stat-card";
-import { EmptyState } from "@/components/ui/empty-state";
-import { formatMoney } from "@/lib/money";
-import { formatDate } from "@/lib/datetime";
-import toast from "react-hot-toast";
-import { Plus, KeyRound, UserX, Users, Wallet } from "lucide-react";
-
-interface City {
-  id: string;
-  name: string;
-  nameKu: string;
-}
-interface Branch {
-  id: string;
-  name: string;
-  nameKu: string;
-  cityId: string;
-  city: City;
-}
-interface Staff {
-  id: string;
-  username: string;
-  fullName: string;
-  role: "ADMIN" | "MANAGER" | "CASHIER";
-  active: boolean;
-  monthlySalary: number | null;
-  lastLoginAt: string | null;
-  createdAt: string;
-  city: City | null;
-  branch: Branch | null;
-}
-
-const ROLE_TONES: Record<Staff["role"], "red" | "purple" | "green"> = {
-  ADMIN: "red",
-  MANAGER: "purple",
-  CASHIER: "green",
-};
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { UserPlus, Pencil, KeyRound, Power, Clock, Save } from "lucide-react";
+import { useFetch, apiSend } from "@/lib/client";
+import { shortDate, iqd } from "@/lib/format";
+import type { StaffMember } from "@/lib/types";
+import { ROLES } from "@/lib/permissions";
+import { useSession } from "@/lib/session";
+import { BRANCH_LABELS, BRANCHES, isBranch } from "@/lib/branches";
+import { closesNextDay } from "@/lib/businessDay";
+import { PageHeader } from "@/components/PageHeader";
+import { Loading, ErrorState, EmptyState, Modal } from "@/components/ui";
+import { useToast } from "@/components/Toast";
 
 export default function StaffPage() {
-  const { t } = useLanguage();
-  const [staff, setStaff] = useState<Staff[]>([]);
-  const [cities, setCities] = useState<(City & { branches: Branch[] })[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [settings, setSettings] = useState<{ openingHour: number; closingHour: number } | null>(null);
+  const { data, loading, error, reload } = useFetch<{ staff: StaffMember[] }>("/api/staff");
+  const { user } = useSession();
+  const isAdmin = user.role === "admin";
+  const toast = useToast();
+  const [editModal, setEditModal] = useState<{ open: boolean; member?: StaffMember }>({ open: false });
+  const [pwModal, setPwModal] = useState<{ open: boolean; member?: StaffMember }>({ open: false });
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [staffRes, citiesRes, settingsRes] = await Promise.all([
-      fetch("/api/staff"),
-      fetch("/api/cities"),
-      fetch("/api/staff/business-hours"),
-    ]);
-    setStaff((await staffRes.json()).staff ?? []);
-    setCities((await citiesRes.json()).cities ?? []);
-    setSettings((await settingsRes.json()).settings ?? null);
-    setLoading(false);
-  }, []);
+  if (loading) return <Loading />;
+  if (error) return <ErrorState message={error} onRetry={reload} />;
+  const staff = data?.staff ?? [];
+  const payroll = staff
+    .filter((m) => m.active)
+    .reduce((s, m) => s + (m.salary ?? 0), 0);
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  async function resetPassword(id: string) {
-    const res = await fetch(`/api/staff/${id}/reset-password`, { method: "POST" });
-    const data = await res.json();
-    if (res.ok) {
-      toast.success(t("staff.passwordReset", { password: data.newPassword }), { duration: 10000 });
+  async function toggleActive(member: StaffMember) {
+    try {
+      await apiSend(`/api/staff/${member.id}`, "PATCH", { active: !member.active });
+      toast.show(member.active ? "Account deactivated" : "Account activated");
+      reload();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
     }
   }
-
-  async function deactivate(id: string) {
-    const res = await fetch(`/api/staff/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ active: false }),
-    });
-    if (res.ok) {
-      toast.success(t("staff.staffDeactivated"));
-      load();
-    }
-  }
-
-  async function saveHours(opening: number, closing: number) {
-    const res = await fetch("/api/staff/business-hours", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ openingHour: opening, closingHour: closing }),
-    });
-    if (res.ok) {
-      toast.success(t("common.success"));
-      load();
-    }
-  }
-
-  const totalPayroll = staff.reduce((sum, s) => sum + (s.monthlySalary ?? 0), 0);
-
-  const roleLabel: Record<Staff["role"], string> = {
-    ADMIN: t("staff.roleAdmin"),
-    MANAGER: t("staff.roleManager"),
-    CASHIER: t("staff.roleCashier"),
-  };
 
   return (
-    <div>
+    <>
       <PageHeader
-        title={t("staff.header")}
-        actions={
-          <Button onClick={() => setShowForm(true)}>
-            <Plus size={16} /> {t("staff.addStaffMember")}
-          </Button>
+        title="Staff Management"
+        subtitle="Accounts, roles, and access"
+        action={
+          <button className="btn-primary px-3 py-2 text-sm" onClick={() => setEditModal({ open: true })}>
+            <UserPlus size={18} /> Add staff
+          </button>
         }
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-        <StatCard label={t("staff.totalPayroll")} value={formatMoney(totalPayroll)} icon={Wallet} tone="red" />
-        <StatCard label={t("staff.header")} value={String(staff.length)} icon={Users} />
-      </div>
+      {isAdmin && <BusinessHoursCard />}
 
-      <Card className="mb-6">
-        <CardContent className="pt-5">
-          <h3 className="font-bold mb-1.5">{t("staff.businessHours")}</h3>
-          <p className="text-xs text-[var(--muted)] mb-4">{t("staff.businessHoursHint")}</p>
-          {settings && (
-            <div className="flex items-end gap-3 flex-wrap">
-              <div>
-                <Label>{t("staff.openingHour")}</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={23}
-                  defaultValue={settings.openingHour}
-                  className="w-24"
-                  onBlur={(e) => saveHours(Number(e.target.value), settings.closingHour)}
-                />
-              </div>
-              <div>
-                <Label>{t("staff.closingHour")}</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={23}
-                  defaultValue={settings.closingHour}
-                  className="w-24"
-                  onBlur={(e) => saveHours(settings.openingHour, Number(e.target.value))}
-                />
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {loading ? (
-        <div className="skeleton rounded-2xl h-64" />
-      ) : (
-        <Card>
-          <CardContent className="pt-5 overflow-x-auto">
-            {staff.length === 0 ? (
-              <EmptyState icon={Users} title={t("common.noResultsFound")} />
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-start text-[11px] font-bold uppercase tracking-wide text-[var(--muted)] border-b border-[var(--card-border)]">
-                    <th className="pb-3 text-start">{t("staff.tableName")}</th>
-                    <th className="pb-3 text-start">{t("staff.tableUsername")}</th>
-                    <th className="pb-3 text-start">{t("staff.tableRole")}</th>
-                    <th className="pb-3 text-start">{t("staff.tableCityBranch")}</th>
-                    <th className="pb-3 text-start">{t("staff.tableStatus")}</th>
-                    <th className="pb-3 text-start">{t("staff.tableDateAdded")}</th>
-                    <th className="pb-3"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {staff.map((s, i) => (
-                    <motion.tr
-                      key={s.id}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: i * 0.02 }}
-                      className="border-b border-[var(--card-border-soft)] last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02]"
-                    >
-                      <td className="py-3 font-semibold">{s.fullName}</td>
-                      <td className="py-3 text-[var(--muted)]">{s.username}</td>
-                      <td className="py-3">
-                        <Badge tone={ROLE_TONES[s.role]}>{roleLabel[s.role]}</Badge>
-                      </td>
-                      <td className="py-3 text-[var(--muted)]">
-                        {s.branch ? `${s.branch.city.name} — ${s.branch.name}` : s.city?.name ?? "—"}
-                      </td>
-                      <td className="py-3">
-                        <Badge tone={s.active ? "green" : "neutral"}>
-                          {s.active ? t("common.active") : t("common.inactive")}
-                        </Badge>
-                      </td>
-                      <td className="py-3 ltr-nums text-[var(--muted)]">{formatDate(s.createdAt)}</td>
-                      <td className="py-3 text-end whitespace-nowrap">
-                        <button
-                          onClick={() => resetPassword(s.id)}
-                          className="h-7 w-7 inline-flex items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10"
-                          title={t("staff.resetPassword")}
-                        >
-                          <KeyRound size={14} />
-                        </button>
-                        {s.active && (
-                          <button
-                            onClick={() => deactivate(s.id)}
-                            className="h-7 w-7 inline-flex items-center justify-center rounded-lg hover:bg-shklet-red/10"
-                            title={t("staff.deactivateAccount")}
-                          >
-                            <UserX size={14} className="text-shklet-red" />
-                          </button>
-                        )}
-                      </td>
-                    </motion.tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </CardContent>
-        </Card>
+      {isAdmin && (
+        <div className="card p-4 mb-4">
+          <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">
+            Total monthly payroll (active staff)
+          </p>
+          <p className="text-2xl font-extrabold text-leaf mt-1">{iqd(payroll)}</p>
+        </div>
       )}
 
-      <StaffFormModal
-        open={showForm}
-        cities={cities}
-        onClose={() => setShowForm(false)}
-        onSaved={() => {
-          setShowForm(false);
-          load();
-        }}
-      />
+      {staff.length === 0 ? (
+        <EmptyState title="No staff yet" />
+      ) : (
+        <div className="card overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left opacity-60 border-b border-black/10 dark:border-white/10">
+                <th className="p-3">Name</th>
+                <th className="p-3">Username</th>
+                <th className="p-3">Role</th>
+                <th className="p-3">Branch</th>
+                {isAdmin && <th className="p-3">Salary</th>}
+                <th className="p-3">Status</th>
+                <th className="p-3">Added</th>
+                <th className="p-3">Last login</th>
+                <th className="p-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {staff.map((m) => (
+                <tr key={m.id} className="border-b border-black/5 dark:border-white/5">
+                  <td className="p-3 font-bold">{m.fullName}</td>
+                  <td className="p-3 opacity-70">{m.username}</td>
+                  <td className="p-3 capitalize">
+                    <span className="chip bg-black/10 dark:bg-white/10">{m.role}</span>
+                  </td>
+                  <td className="p-3">
+                    {isBranch(m.branch) ? (
+                      <span className="chip bg-corn/15 text-corn-600">{BRANCH_LABELS[m.branch]}</span>
+                    ) : (
+                      <span className="chip bg-leaf/15 text-leaf">All branches</span>
+                    )}
+                  </td>
+                  {isAdmin && (
+                    <td className="p-3 opacity-80">{m.salary != null ? iqd(m.salary) : "—"}</td>
+                  )}
+                  <td className="p-3">
+                    {m.active ? (
+                      <span className="chip bg-leaf/20 text-leaf">Active</span>
+                    ) : (
+                      <span className="chip bg-red-500/15 text-red-500">Inactive</span>
+                    )}
+                  </td>
+                  <td className="p-3 opacity-70">{shortDate(m.createdAt)}</td>
+                  <td className="p-3 opacity-70">{m.lastLogin ? shortDate(m.lastLogin) : "—"}</td>
+                  <td className="p-3">
+                    <div className="flex gap-1 justify-end">
+                      <button className="btn-ghost size-8 rounded-lg" title="Edit" onClick={() => setEditModal({ open: true, member: m })}>
+                        <Pencil size={14} />
+                      </button>
+                      <button className="btn-ghost size-8 rounded-lg" title="Reset password" onClick={() => setPwModal({ open: true, member: m })}>
+                        <KeyRound size={14} />
+                      </button>
+                      <button
+                        className={`btn-ghost size-8 rounded-lg ${m.active ? "text-red-500" : "text-leaf"}`}
+                        title={m.active ? "Deactivate" : "Activate"}
+                        onClick={() => toggleActive(m)}
+                      >
+                        <Power size={14} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {editModal.open && (
+        <StaffModal
+          member={editModal.member}
+          isAdmin={isAdmin}
+          onClose={() => setEditModal({ open: false })}
+          onSaved={() => {
+            setEditModal({ open: false });
+            reload();
+          }}
+        />
+      )}
+      {pwModal.open && pwModal.member && (
+        <PasswordModal member={pwModal.member} onClose={() => setPwModal({ open: false })} />
+      )}
+    </>
+  );
+}
+
+// 12-hour label for an hour-of-day (0–23): 0 → "12:00 AM", 17 → "5:00 PM".
+function hourLabel(h: number): string {
+  const period = h < 12 ? "AM" : "PM";
+  const twelve = h % 12 === 0 ? 12 : h % 12;
+  return `${twelve}:00 ${period}`;
+}
+
+// Admin-only operating-hours editor. Opening/closing hours drive every
+// business-day report boundary (see lib/businessDay.ts). When the closing hour
+// is at or before the opening hour it falls on the NEXT calendar day (e.g. open
+// 5 PM, close 1 AM) — surfaced explicitly so a late close isn't mistaken for the
+// same afternoon.
+function BusinessHoursCard() {
+  const { businessHours } = useSession();
+  const router = useRouter();
+  const toast = useToast();
+  const [openHour, setOpenHour] = useState(businessHours.openHour);
+  const [closeHour, setCloseHour] = useState(businessHours.closeHour);
+  const [saving, setSaving] = useState(false);
+
+  const nextDay = closesNextDay({ openHour, closeHour });
+  const dirty = openHour !== businessHours.openHour || closeHour !== businessHours.closeHour;
+  const sameHour = openHour === closeHour;
+
+  async function save() {
+    if (sameHour) {
+      toast.show("Opening and closing hours can't be the same", "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      await apiSend("/api/settings/business-hours", "PUT", { openHour, closeHour });
+      toast.show("Business hours updated");
+      // Reload the layout so the new hours flow into the session for every page.
+      router.refresh();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card p-4 mb-4">
+      <div className="flex items-center gap-2 mb-1">
+        <Clock size={18} className="text-leaf" />
+        <h2 className="font-extrabold">Business hours</h2>
+      </div>
+      <p className="text-xs opacity-60 mb-3">
+        When a trading day opens and closes. All sales, profit and report dates are grouped by this
+        window, so a sale just after midnight counts toward the night it belongs to — not the new
+        calendar date.
+      </p>
+      <div className="flex flex-wrap items-end gap-4">
+        <div>
+          <label className="label">Opening hour</label>
+          <select
+            className="input py-2 w-auto"
+            value={openHour}
+            onChange={(e) => setOpenHour(Number(e.target.value))}
+          >
+            {Array.from({ length: 24 }, (_, h) => (
+              <option key={h} value={h}>
+                {hourLabel(h)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label">Closing hour</label>
+          <select
+            className="input py-2 w-auto"
+            value={closeHour}
+            onChange={(e) => setCloseHour(Number(e.target.value))}
+          >
+            {Array.from({ length: 24 }, (_, h) => (
+              <option key={h} value={h}>
+                {hourLabel(h)}
+                {h <= openHour ? " (next day)" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button className="btn-primary px-4 py-2.5 text-sm" onClick={save} disabled={saving || !dirty || sameHour}>
+          <Save size={16} /> Save hours
+        </button>
+      </div>
+      <p className="text-xs mt-2 opacity-70">
+        Current: <b>{hourLabel(openHour)}</b> → <b>{hourLabel(closeHour)}</b>
+        {nextDay ? " (closes next day)" : " (same day)"}
+        {sameHour && <span className="text-red-500 font-semibold"> — choose different hours</span>}
+      </p>
     </div>
   );
 }
 
-function StaffFormModal({
-  open,
-  cities,
+function StaffModal({
+  member,
+  isAdmin,
   onClose,
   onSaved,
 }: {
-  open: boolean;
-  cities: (City & { branches: Branch[] })[];
+  member?: StaffMember;
+  isAdmin: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { t } = useLanguage();
-  const [fullName, setFullName] = useState("");
-  const [username, setUsername] = useState("");
+  const [fullName, setFullName] = useState(member?.fullName ?? "");
+  const [username, setUsername] = useState(member?.username ?? "");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"ADMIN" | "MANAGER" | "CASHIER">("CASHIER");
-  const [cityId, setCityId] = useState("");
-  const [branchId, setBranchId] = useState("");
-  const [monthlySalary, setMonthlySalary] = useState("");
+  const [role, setRole] = useState<StaffMember["role"]>(member?.role ?? "cashier");
+  const [branch, setBranch] = useState<string>(member?.branch ?? "suli");
+  const [salary, setSalary] = useState(member?.salary?.toString() ?? "");
   const [saving, setSaving] = useState(false);
+  const toast = useToast();
 
   async function save() {
     setSaving(true);
-    const res = await fetch("/api/staff", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fullName,
-        username,
-        password,
-        role,
-        cityId: role === "MANAGER" ? cityId : undefined,
-        branchId: role === "CASHIER" ? branchId : undefined,
-        monthlySalary: monthlySalary ? Number(monthlySalary) : undefined,
-      }),
-    });
-    setSaving(false);
-    if (res.ok) {
-      toast.success(t("staff.staffSaved"));
+    try {
+      if (member) {
+        await apiSend(`/api/staff/${member.id}`, "PATCH", {
+          fullName,
+          role,
+          ...(role !== "admin" ? { branch } : {}),
+          ...(isAdmin ? { salary } : {}),
+        });
+      } else {
+        await apiSend("/api/staff", "POST", {
+          username,
+          password,
+          fullName,
+          role,
+          ...(role !== "admin" ? { branch } : {}),
+          ...(isAdmin ? { salary } : {}),
+        });
+      }
+      toast.show("Saved");
       onSaved();
-    } else {
-      const data = await res.json();
-      toast.error(data.error ?? t("common.somethingWentWrong"));
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+      setSaving(false);
     }
   }
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={t("staff.addStaffMember")}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button onClick={save} loading={saving}>
-            {t("common.save")}
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-3 pb-2">
+    <Modal open onClose={onClose} title={member ? "Edit staff" : "Add staff"}>
+      <div className="flex flex-col gap-3">
         <div>
-          <Label>{t("staff.fullName")}</Label>
-          <Input value={fullName} onChange={(e) => setFullName(e.target.value)} autoFocus />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label>{t("staff.username")}</Label>
-            <Input value={username} onChange={(e) => setUsername(e.target.value)} />
-          </div>
-          <div>
-            <Label>{t("staff.password")}</Label>
-            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-          </div>
+          <label className="label">Full name</label>
+          <input className="input" value={fullName} onChange={(e) => setFullName(e.target.value)} autoFocus />
         </div>
         <div>
-          <Label>{t("staff.role")}</Label>
-          <Select value={role} onChange={(e) => setRole(e.target.value as typeof role)}>
-            <option value="ADMIN">{t("staff.roleAdmin")}</option>
-            <option value="MANAGER">{t("staff.roleManager")}</option>
-            <option value="CASHIER">{t("staff.roleCashier")}</option>
-          </Select>
+          <label className="label">Username</label>
+          <input
+            className="input"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            disabled={!!member}
+            autoCapitalize="none"
+          />
+          {member && <p className="text-xs opacity-50 mt-1">Username can’t be changed.</p>}
         </div>
-        {role === "MANAGER" && (
+        {!member && (
           <div>
-            <Label>{t("staff.assignedCity")}</Label>
-            <Select value={cityId} onChange={(e) => setCityId(e.target.value)}>
-              <option value="">—</option>
-              {cities.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
+            <label className="label">Password</label>
+            <input
+              className="input"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="At least 8 characters"
+            />
+          </div>
+        )}
+        <div>
+          <label className="label">Role</label>
+          <select className="input" value={role} onChange={(e) => setRole(e.target.value as StaffMember["role"])}>
+            {ROLES.map((r) => (
+              <option key={r} value={r} className="capitalize">
+                {r}
+              </option>
+            ))}
+          </select>
+          {role === "admin" && (
+            <p className="text-xs opacity-50 mt-1">Admins are super admins — they see and switch between both branches.</p>
+          )}
+        </div>
+        {role !== "admin" && (
+          <div>
+            <label className="label">Branch</label>
+            <select className="input" value={branch} onChange={(e) => setBranch(e.target.value)}>
+              {BRANCHES.map((b) => (
+                <option key={b} value={b}>
+                  {BRANCH_LABELS[b]}
                 </option>
               ))}
-            </Select>
+            </select>
+            <p className="text-xs opacity-50 mt-1">
+              This account only sees and manages the selected branch.
+            </p>
           </div>
         )}
-        {role === "CASHIER" && (
+        {isAdmin && (
           <div>
-            <Label>{t("staff.assignedBranch")}</Label>
-            <Select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-              <option value="">—</option>
-              {cities.map((c) => (
-                <optgroup key={c.id} label={c.name}>
-                  {c.branches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {c.name} — {b.name}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </Select>
+            <label className="label">Monthly salary (IQD)</label>
+            <input
+              className="input"
+              type="number"
+              inputMode="numeric"
+              placeholder="Optional"
+              value={salary}
+              onChange={(e) => setSalary(e.target.value)}
+            />
           </div>
         )}
-        <div>
-          <Label>{t("staff.monthlySalary")}</Label>
-          <Input type="number" value={monthlySalary} onChange={(e) => setMonthlySalary(e.target.value)} />
-        </div>
+      </div>
+      <div className="flex gap-2 mt-5">
+        <button className="btn-ghost flex-1 py-2.5" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn-primary flex-1 py-2.5" onClick={save} disabled={saving}>
+          Save
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function PasswordModal({ member, onClose }: { member: StaffMember; onClose: () => void }) {
+  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+
+  async function save() {
+    setSaving(true);
+    try {
+      await apiSend(`/api/staff/${member.id}/password`, "POST", { password });
+      toast.show("Password reset");
+      onClose();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Reset password — ${member.fullName}`}>
+      <label className="label">New password</label>
+      <input
+        className="input"
+        type="password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        autoFocus
+        placeholder="At least 8 characters"
+      />
+      <div className="flex gap-2 mt-5">
+        <button className="btn-ghost flex-1 py-2.5" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn-primary flex-1 py-2.5" onClick={save} disabled={saving || password.length < 8}>
+          Reset password
+        </button>
       </div>
     </Modal>
   );
