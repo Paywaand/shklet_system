@@ -19,6 +19,7 @@ export const ku: Dict = {
     loading: "بارکردن…",
     cash: "کاش",
     card: "کارت",
+    pos: "پی‌ئۆس",
     mainBranch: "لقی سەرەکی (بێ بۆنە)",
   },
 
@@ -192,7 +193,8 @@ export const ku: Dict = {
       addGroup: "زیادکردنی گروپ",
       noModifiers: "هیچ بژاردەیەکی زیادە نییە. گروپێک زیاد بکە بۆ دیاریکردنی هەڵبژاردن (بۆ نموونە: سۆس).",
       groupNamePlaceholder: "ناوی گروپ (بۆ نموونە: سۆس)",
-      optionsPlaceholder: "بژاردەکان، بە کۆما جیاکراونەتەوە (بۆ نموونە: سۆسی شیرین، سۆسی ترش، نیو بە نیو)",
+      optionLabelPlaceholder: "هەڵبژاردن (بۆ نموونە: چۆکلەیت)",
+      addOption: "زیادکردنی هەڵبژاردن",
     },
     confirm: {
       deleteCategory: (vars) => `پۆلی "${vars.name}" و هەموو بابەتەکانی بسڕێتەوە؟`,

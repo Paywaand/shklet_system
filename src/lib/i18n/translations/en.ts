@@ -19,6 +19,7 @@ export const en: Dict = {
     loading: "Loading…",
     cash: "Cash",
     card: "Card",
+    pos: "POS",
     mainBranch: "Main branch (no event)",
   },
 
@@ -192,7 +193,8 @@ export const en: Dict = {
       addGroup: "Add group",
       noModifiers: "No modifiers. Add a group to prompt for a choice (e.g. sauce).",
       groupNamePlaceholder: "Group name (e.g. Sauce)",
-      optionsPlaceholder: "Options, comma-separated (e.g. Sweet Sauce, Sour Sauce, Half & Half)",
+      optionLabelPlaceholder: "Option (e.g. Chocolate)",
+      addOption: "Add option",
     },
     confirm: {
       deleteCategory: (vars) => `Delete category "${vars.name}" and all its items?`,

@@ -23,6 +23,7 @@ import {
   type BusinessHours,
 } from "@/lib/businessDay";
 import type { Order, ExpectedCash } from "@/lib/types";
+import type { PaymentMethod } from "@/lib/paymentMethods";
 import { useSession } from "@/lib/session";
 import { useToast } from "@/components/Toast";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
@@ -35,7 +36,7 @@ type Analytics = {
   revenueByDay: { date: string; revenue: number }[];
   topItems: { name: string; qty: number; revenue: number }[];
   ordersByHour: { hour: number; count: number }[];
-  paymentSplit: { cash: number; card: number };
+  paymentSplit: { cash: number; card: number; pos: number };
   orders: Order[];
 };
 
@@ -117,7 +118,7 @@ export default function AnalyticsPage() {
   const cash = useFetch<ExpectedCash>(cashUrl);
 
   const [query, setQuery] = useState("");
-  const [pmFilter, setPmFilter] = useState<"all" | "cash" | "card">("all");
+  const [pmFilter, setPmFilter] = useState<"all" | PaymentMethod>("all");
   const [otFilter, setOtFilter] = useState<"all" | "walk_in" | "takeaway">("all");
   const [paidFilter, setPaidFilter] = useState<"all" | "paid" | "unpaid">("all");
 
@@ -188,6 +189,7 @@ export default function AnalyticsPage() {
   const pieData = [
     { name: t("common.cash"), value: paymentSplit.cash },
     { name: t("common.card"), value: paymentSplit.card },
+    { name: t("common.pos"), value: paymentSplit.pos },
   ].filter((d) => d.value > 0);
 
   return (
@@ -340,6 +342,7 @@ export default function AnalyticsPage() {
               <option value="all">{t("sales.orderHistory.allPayments")}</option>
               <option value="cash">{t("common.cash")}</option>
               <option value="card">{t("common.card")}</option>
+              <option value="pos">{t("common.pos")}</option>
             </select>
             <select
               className="input py-2 w-auto"
@@ -403,7 +406,11 @@ export default function AnalyticsPage() {
                     </td>
                     <td className="py-2 pr-3 font-bold">{num(o.total)}</td>
                     <td className="py-2 pr-3 capitalize">
-                      {o.paymentMethod === "cash" ? t("common.cash") : t("common.card")}
+                      {o.paymentMethod === "cash"
+                        ? t("common.cash")
+                        : o.paymentMethod === "card"
+                          ? t("common.card")
+                          : t("common.pos")}
                     </td>
                     <td className="py-2 pr-3">
                       {o.isPaid ? (

@@ -17,10 +17,17 @@ const MAX_STR = 200;
 const shortStr = z.string().trim().min(1).max(MAX_STR);
 
 // ---- MenuItem.modifiers ----
+// Each option carries a price delta (IQD, can be 0) added to the item's base price
+// when selected — e.g. a "Sauce" group: Chocolate +500, Nutella +0.
+export const ModifierOptionSchema = z.object({
+  label: shortStr,
+  price: z.number().int().min(0),
+});
+
 export const ModifierGroupSchema = z.object({
   name: shortStr,
   required: z.boolean(),
-  options: z.array(shortStr).max(MAX_OPTIONS),
+  options: z.array(ModifierOptionSchema).max(MAX_OPTIONS),
 });
 
 export const ModifiersSchema = z.array(ModifierGroupSchema).max(MAX_GROUPS);

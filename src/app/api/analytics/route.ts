@@ -92,6 +92,7 @@ export async function GET(req: Request) {
   const paymentSplit = {
     cash: soldOrders.filter((o) => o.paymentMethod === "cash").length,
     card: soldOrders.filter((o) => o.paymentMethod === "card").length,
+    pos: soldOrders.filter((o) => o.paymentMethod === "pos").length,
   };
 
   return NextResponse.json({

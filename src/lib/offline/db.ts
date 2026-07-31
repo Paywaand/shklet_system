@@ -4,6 +4,7 @@
 // PATCH ready/collected). Delivery, Daily Needs, warehouse, and expenses are NOT cached
 // or queued here.
 import { openDB, type IDBPDatabase } from "idb";
+import type { PaymentMethod } from "@/lib/paymentMethods";
 
 // ----------------------- Outbox op model -----------------------
 export type OfflineLineItem = {
@@ -15,7 +16,7 @@ export type OfflineLineItem = {
 
 export type CreatePayload = {
   pagerNumber: number;
-  paymentMethod: "cash" | "card";
+  paymentMethod: PaymentMethod;
   orderType: "walk_in" | "takeaway";
   isPaid: boolean;
   eventId: string | null;

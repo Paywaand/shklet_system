@@ -4,6 +4,7 @@ import { authorize, audit } from "@/lib/guard";
 import { generateUniqueOrderShortId } from "@/lib/shortId";
 import { activeBranch } from "@/lib/branchScope";
 import { isValidLocation } from "@/lib/branches";
+import { isPaymentMethod } from "@/lib/paymentMethods";
 
 // POST /api/orders — place a new order (POS).
 export async function POST(req: Request) {
@@ -40,8 +41,8 @@ export async function POST(req: Request) {
 
   if (!Number.isInteger(pagerNumber) || pagerNumber < 1 || pagerNumber > 30)
     return NextResponse.json({ error: "Pager number must be between 1 and 30" }, { status: 400 });
-  if (paymentMethod !== "cash" && paymentMethod !== "card")
-    return NextResponse.json({ error: "Payment method must be cash or card" }, { status: 400 });
+  if (!isPaymentMethod(paymentMethod))
+    return NextResponse.json({ error: "Payment method must be cash, card, or pos" }, { status: 400 });
   if (items.length === 0)
     return NextResponse.json({ error: "Add at least one item" }, { status: 400 });
 

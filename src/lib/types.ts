@@ -1,9 +1,16 @@
 // Shared shapes returned by the API to the client.
 
+import type { PaymentMethod } from "./paymentMethods";
+
+export type ModifierOption = {
+  label: string;
+  price: number; // IQD delta added to the item's base price when selected
+};
+
 export type ModifierGroup = {
   name: string;
   required: boolean;
-  options: string[];
+  options: ModifierOption[];
 };
 
 export type MenuItem = {
@@ -39,7 +46,7 @@ export type Order = {
   shortId: string | null;
   pagerNumber: number;
   total: number;
-  paymentMethod: "cash" | "card";
+  paymentMethod: PaymentMethod;
   orderType: "walk_in" | "takeaway";
   isPaid: boolean;
   status: "pending" | "ready" | "collected" | "cancelled";

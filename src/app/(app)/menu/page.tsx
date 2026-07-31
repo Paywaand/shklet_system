@@ -263,13 +263,38 @@ function ItemModal({
   function removeGroup(idx: number) {
     setGroups((g) => g.filter((_, i) => i !== idx));
   }
+  function addOption(groupIdx: number) {
+    setGroups((g) =>
+      g.map((grp, i) => (i === groupIdx ? { ...grp, options: [...grp.options, { label: "", price: 0 }] } : grp))
+    );
+  }
+  function updateOption(groupIdx: number, optIdx: number, patch: Partial<ModifierGroup["options"][number]>) {
+    setGroups((g) =>
+      g.map((grp, i) =>
+        i === groupIdx
+          ? { ...grp, options: grp.options.map((o, j) => (j === optIdx ? { ...o, ...patch } : o)) }
+          : grp
+      )
+    );
+  }
+  function removeOption(groupIdx: number, optIdx: number) {
+    setGroups((g) =>
+      g.map((grp, i) => (i === groupIdx ? { ...grp, options: grp.options.filter((_, j) => j !== optIdx) } : grp))
+    );
+  }
 
   async function save() {
     setSaving(true);
     try {
-      // Drop empty groups before saving.
+      // Drop empty groups/options before saving.
       const cleanGroups = groups
-        .map((g) => ({ ...g, name: g.name.trim(), options: g.options.filter((o) => o.trim()) }))
+        .map((g) => ({
+          ...g,
+          name: g.name.trim(),
+          options: g.options
+            .map((o) => ({ label: o.label.trim(), price: Math.max(0, Math.round(Number(o.price) || 0)) }))
+            .filter((o) => o.label),
+        }))
         .filter((g) => g.name && g.options.length);
       const payload = {
         name,
@@ -376,14 +401,41 @@ function ItemModal({
                       <Trash2 size={14} />
                     </button>
                   </div>
-                  <input
-                    className="input py-1.5"
-                    placeholder={t("menu.itemModal.optionsPlaceholder")}
-                    value={g.options.join(", ")}
-                    onChange={(e) =>
-                      updateGroup(idx, { options: e.target.value.split(",").map((o) => o.trim()) })
-                    }
-                  />
+                  <div className="flex flex-col gap-1.5">
+                    {g.options.map((opt, optIdx) => (
+                      <div key={optIdx} className="flex items-center gap-2">
+                        <input
+                          className="input py-1.5 flex-1"
+                          placeholder={t("menu.itemModal.optionLabelPlaceholder")}
+                          value={opt.label}
+                          onChange={(e) => updateOption(idx, optIdx, { label: e.target.value })}
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          step={250}
+                          className="input py-1.5 w-24"
+                          placeholder="0"
+                          value={opt.price || ""}
+                          onChange={(e) => updateOption(idx, optIdx, { price: Number(e.target.value) })}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeOption(idx, optIdx)}
+                          className="btn-ghost size-8 rounded-lg text-red-500 shrink-0"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => addOption(idx)}
+                      className="btn-ghost self-start py-1 px-2 text-xs font-bold"
+                    >
+                      <Plus size={12} /> {t("menu.itemModal.addOption")}
+                    </button>
+                  </div>
                   <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer mt-2">
                     <input
                       type="checkbox"

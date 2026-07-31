@@ -7,6 +7,7 @@ import {
   Trash2,
   Banknote,
   CreditCard,
+  Terminal,
   ShoppingCart,
   Check,
   Clock,
@@ -25,6 +26,7 @@ import type { MenuItem, ModifierGroup, Order, DeliveryOrder } from "@/lib/types"
 import { usePosOffline } from "@/lib/offline/usePosOffline";
 import { ModifiersSchema, safeParseJson } from "@/lib/schemas";
 import { ACTIVE_BRANCH_COOKIE, DEFAULT_LOCATION, LOCATION_LABELS, LOCATIONS, isBranch } from "@/lib/branches";
+import type { PaymentMethod } from "@/lib/paymentMethods";
 import { Loading, ErrorState, EmptyState, Modal } from "@/components/ui";
 import { Elapsed } from "@/components/Elapsed";
 import { useToast } from "@/components/Toast";
@@ -102,7 +104,7 @@ export default function CashierPage() {
   const [activeCat, setActiveCat] = useState<string>(ALL);
   const [cart, setCart] = useState<CartLine[]>([]);
   const [pager, setPager] = useState<number | null>(null);
-  const [payment, setPayment] = useState<"cash" | "card">("cash");
+  const [payment, setPayment] = useState<PaymentMethod>("cash");
   const [isPaid, setIsPaid] = useState(true);
   const [placing, setPlacing] = useState(false);
   const [cartOpen, setCartOpen] = useState(false); // mobile bottom sheet
@@ -128,14 +130,14 @@ export default function CashierPage() {
     addLine(item);
   }
 
-  function addLine(item: MenuItem, modifier?: string) {
+  function addLine(item: MenuItem, modifier?: string, priceDelta = 0) {
     const key = modifier ? `${item.id}::${modifier}` : item.id;
     setCart((c) => {
       const found = c.find((l) => l.key === key);
       if (found) return c.map((l) => (l.key === key ? { ...l, quantity: l.quantity + 1 } : l));
       return [
         ...c,
-        { key, id: item.id, name: itemName(item, lang), price: item.price, quantity: 1, modifier },
+        { key, id: item.id, name: itemName(item, lang), price: item.price + priceDelta, quantity: 1, modifier },
       ];
     });
   }
@@ -445,8 +447,8 @@ export default function CashierPage() {
         <ModifierModal
           item={modifierItem}
           onClose={() => setModifierItem(null)}
-          onConfirm={(modifier) => {
-            addLine(modifierItem, modifier);
+          onConfirm={(modifier, priceDelta) => {
+            addLine(modifierItem, modifier, priceDelta);
             setModifierItem(null);
           }}
         />
@@ -549,7 +551,7 @@ function ModifierModal({
 }: {
   item: MenuItem;
   onClose: () => void;
-  onConfirm: (modifier: string) => void;
+  onConfirm: (modifier: string, priceDelta: number) => void;
 }) {
   const { t, lang } = useLanguage();
   const groups = parseModifiers(item.modifiers);
@@ -558,12 +560,14 @@ function ModifierModal({
   const allRequiredChosen = groups.every((g) => !g.required || choices[g.name]);
 
   function confirm() {
-    // Join the chosen option labels into a single sub-line, e.g. "Sweet Sauce".
-    const label = groups
-      .map((g) => choices[g.name])
-      .filter(Boolean)
-      .join(", ");
-    onConfirm(label);
+    // Join the chosen option labels into a single sub-line, e.g. "Sweet Sauce",
+    // and sum their price deltas onto the item's base price.
+    const chosenOptions = groups
+      .map((g) => g.options.find((o) => o.label === choices[g.name]))
+      .filter((o): o is NonNullable<typeof o> => Boolean(o));
+    const label = chosenOptions.map((o) => o.label).join(", ");
+    const priceDelta = chosenOptions.reduce((s, o) => s + o.price, 0);
+    onConfirm(label, priceDelta);
   }
 
   return (
@@ -577,17 +581,20 @@ function ModifierModal({
             </p>
             <div className="grid gap-2">
               {g.options.map((opt) => {
-                const selected = choices[g.name] === opt;
+                const selected = choices[g.name] === opt.label;
                 return (
                   <button
-                    key={opt}
-                    onClick={() => setChoices((c) => ({ ...c, [g.name]: opt }))}
+                    key={opt.label}
+                    onClick={() => setChoices((c) => ({ ...c, [g.name]: opt.label }))}
                     className={clsx(
                       "btn justify-between px-4 py-3 text-left",
                       selected ? "bg-leaf text-white" : "bg-black/5 dark:bg-white/10"
                     )}
                   >
-                    <span>{opt}</span>
+                    <span>
+                      {opt.label}
+                      {opt.price > 0 && <span className="opacity-70"> (+{iqd(opt.price)})</span>}
+                    </span>
                     {selected && <Check size={18} />}
                   </button>
                 );
@@ -637,8 +644,8 @@ function CartPanel({
   setReference: (s: string) => void;
   pager: number | null;
   setPager: (n: number | null) => void;
-  payment: "cash" | "card";
-  setPayment: (p: "cash" | "card") => void;
+  payment: PaymentMethod;
+  setPayment: (p: PaymentMethod) => void;
   isPaid: boolean;
   setIsPaid: (p: boolean) => void;
   usedPagers: number[];
@@ -771,7 +778,7 @@ function CartPanel({
           {/* Payment */}
           <div>
             <label className="label">{t("cashier.cart.paymentLabel")}</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 onClick={() => setPayment("cash")}
                 className={clsx("btn py-2.5", payment === "cash" ? "bg-leaf text-white" : "bg-black/5 dark:bg-white/10")}
@@ -783,6 +790,12 @@ function CartPanel({
                 className={clsx("btn py-2.5", payment === "card" ? "bg-leaf text-white" : "bg-black/5 dark:bg-white/10")}
               >
                 <CreditCard size={18} /> {t("common.card")}
+              </button>
+              <button
+                onClick={() => setPayment("pos")}
+                className={clsx("btn py-2.5", payment === "pos" ? "bg-leaf text-white" : "bg-black/5 dark:bg-white/10")}
+              >
+                <Terminal size={18} /> {t("common.pos")}
               </button>
             </div>
           </div>

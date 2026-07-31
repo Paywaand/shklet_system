@@ -72,9 +72,11 @@ export async function GET(req: Request): Promise<NextResponse> {
   const orderCount = orders.length;
   const cash = orders.filter((o) => o.paymentMethod === "cash");
   const card = orders.filter((o) => o.paymentMethod === "card");
+  const pos = orders.filter((o) => o.paymentMethod === "pos");
   const payment = {
     cash: { count: cash.length, amount: cash.reduce((s, o) => s + o.total, 0) },
     card: { count: card.length, amount: card.reduce((s, o) => s + o.total, 0) },
+    pos: { count: pos.length, amount: pos.reduce((s, o) => s + o.total, 0) },
   };
 
   // ---- Delivery platform (kept entirely separate from branch sales) ----
