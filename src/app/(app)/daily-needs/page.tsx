@@ -414,7 +414,7 @@ export default function DailyNeedsPage() {
               style={{ width: 56, height: 56, objectFit: "contain", display: "block" }}
             />
             <div>
-              <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: 0.5 }}>CORN&apos;ER</div>
+              <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: 0.5 }}>Shklet</div>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#EF3340" }}>{t("dailyNeeds.header.title")}</div>
             </div>
           </div>

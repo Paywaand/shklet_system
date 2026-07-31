@@ -253,7 +253,7 @@ export function Sidebar({ lowStockCount, activeBranch }: { lowStockCount?: numbe
     <>
       {/* Mobile top bar */}
       <header className="lg:hidden sticky top-0 z-30 flex items-center justify-between px-4 h-14 bg-[var(--surface)] border-b border-black/5 dark:border-white/5">
-        <Image src="/brand/logo_icon.png" alt="Shklet" width={48} height={48} className="size-10" />
+        <Image src="/brand/logo_icon.png" alt="Shklet" width={48} height={48} className="w-10 h-auto" />
         <button onClick={() => setOpen(true)} className="btn-ghost size-10 rounded-xl">
           <MenuIcon size={22} />
         </button>
