@@ -33,7 +33,7 @@ const INVENTORY: { name: string; unit: string; quantity: number; minThreshold: n
 ];
 
 async function main() {
-  // --- Default super admin account (branch = null → all branches) ---
+  // --- Default super admin account (branchId = null → all branches) ---
   // SECURITY: only create the admin when it's missing (first boot / empty DB). We
   // never touch an existing admin's password, so a password changed in the app
   // survives every redeploy. Do NOT change this to overwrite the password on update.
@@ -45,13 +45,25 @@ async function main() {
         password: await bcrypt.hash("admin123", 10),
         fullName: "Administrator",
         role: "admin",
-        branch: null, // super admin — sees/switches both branches
+        branchId: null, // super admin — sees/switches all branches
       },
     });
     console.log("✓ Created default super admin (admin / admin123) — change this after first login");
   } else {
     console.log("• Admin account already exists — password left unchanged");
   }
+
+  // --- Physical branches (idempotent — upsert by name+city) ---
+  const PHYSICAL_BRANCHES = [
+    { name: "60 Street", city: "suli", sortOrder: 0 },
+    { name: "Dania Trade Center", city: "suli", sortOrder: 1 },
+    { name: "Erbil", city: "erbil", sortOrder: 0 },
+  ];
+  for (const b of PHYSICAL_BRANCHES) {
+    const existing = await prisma.branch.findFirst({ where: { name: b.name, city: b.city } });
+    if (!existing) await prisma.branch.create({ data: b });
+  }
+  console.log("✓ Seeded physical branches (60 Street, Dania Trade Center, Erbil)");
 
   // --- Role permissions matrix ---
   for (const role of ROLES) {

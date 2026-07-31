@@ -78,11 +78,12 @@ function createOpToOrder(op: Extract<OutboxOp, { kind: "create" }>): Order {
 
 export type PlaceResult = { ok: true; queued: boolean } | { ok: false; error: string };
 
-// branchId: "" = main 60 Street Branch, otherwise an event id. Determines which
-// branch/event's active-orders queue is fetched and cached.
-export function usePosOffline(branchId: string = "", location: string | null = null) {
+// branchId: "" = main branch, otherwise an event id. Determines which
+// branch/event's active-orders queue is fetched and cached. (Physical-branch
+// scoping is server-side via activeBranchId() — not passed from the client.)
+export function usePosOffline(branchId: string = "") {
   const online = useOnline();
-  const cacheKey = `active:${branchId || "main"}:${location ?? "-"}`;
+  const cacheKey = `active:${branchId || "main"}`;
 
   const [menu, setMenu] = useState<MenuPayload | null>(null);
   const [menuError, setMenuError] = useState<string | null>(null);
@@ -120,7 +121,6 @@ export function usePosOffline(branchId: string = "", location: string | null = n
 
   const loadActive = useCallback(async () => {
     const params = new URLSearchParams({ eventId: branchId || "main" });
-    if (location) params.set("location", location);
     const res = await getJson<ActivePayload>(`/api/orders/active?${params.toString()}`);
     if (res.ok) {
       setActiveRaw(res.data);
@@ -129,7 +129,7 @@ export function usePosOffline(branchId: string = "", location: string | null = n
       const cached = await cacheGet<ActivePayload>(cacheKey);
       if (cached) setActiveRaw(cached);
     }
-  }, [branchId, location, cacheKey]);
+  }, [branchId, cacheKey]);
 
   const syncNow = useCallback(async () => {
     if (syncingRef.current) return;

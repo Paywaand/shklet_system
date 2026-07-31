@@ -12,8 +12,6 @@
     "seed": "tsx prisma/seed.ts",
     "import:menu": "tsx prisma/import-menu.ts",
     "migrate:modifier-prices": "tsx prisma/migrate-modifier-prices.ts",
-    "import:historical-orders": "tsx prisma/import-historical-orders.ts",
-    "import:historical-orders-update": "tsx prisma/import-historical-orders-update.ts",
     "reset-admin": "tsx prisma/reset-admin.ts",
     "demo": "tsx prisma/demo.ts",
     "backup": "tsx scripts/backup-now.ts",

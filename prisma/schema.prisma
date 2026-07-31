@@ -29,10 +29,12 @@ model User {
   password  String // bcrypt hash
   fullName  String
   role      String    @default("cashier") // admin | manager | cashier
-  // Branch this account belongs to: "suli" | "erbil". NULL = super admin
-  // (all branches). Managers/cashiers MUST have a branch; every API call they
-  // make is hard-scoped to it server-side.
-  branch    String?
+  // Physical branch this account belongs to (e.g. "60 Street", "Dania Trade
+  // Center", "Erbil"). NULL = super admin (all branches). Managers/cashiers
+  // MUST have a branch; every API call they make is hard-scoped to it (and,
+  // through it, to its city) server-side — see activeBranch()/activeBranchId().
+  branchId  String?
+  branch    Branch?   @relation(fields: [branchId], references: [id])
   active    Boolean   @default(true)
   salary    Int? // monthly salary in IQD (admin-visible only)
   createdAt DateTime  @default(now())
@@ -48,6 +50,30 @@ model User {
   withdrawals     CashWithdrawal[]
   cashAdjustments CashAdjustment[]
   sessions        Session[]
+
+  @@index([branchId])
+}
+
+// ----------------------- Physical branches -----------------------
+// A physical, staffed location — e.g. Sulaymaniyah has two ("60 Street",
+// "Dania Trade Center"), Erbil has one. `city` groups branches under the
+// existing city-level scoping ("suli" | "erbil") used by Menu, Inventory,
+// Expenses, Cash Tracking, Delivery, and Daily Needs — those stay shared
+// across a city's branches; only Staff, Orders, and Hours are branch-level.
+model Branch {
+  id        String   @id @default(cuid())
+  name      String // editable — "60 Street", "Dania Trade Center", "Erbil"
+  city      String // "suli" | "erbil"
+  openHour  Int      @default(17)
+  closeHour Int      @default(1)
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  users  User[]
+  orders Order[]
+
+  @@index([city])
 }
 
 // ----------------------- Server-side sessions -----------------------
@@ -107,11 +133,10 @@ model Order {
   // retry arrives after the row already exists (network dropped before the response),
   // the server returns the existing order instead of creating a duplicate.
   clientId        String?     @unique
-  branch          String      @default("suli") // "suli" | "erbil"
-  // Physical branch within the city — Sulaymaniyah has two ("1" | "2"); Erbil
-  // has one and this stays null. Active queue + pager uniqueness are scoped by
-  // (branch, location) so each physical location has its own pager set.
-  location        String?
+  branch          String      @default("suli") // "suli" | "erbil" (city — kept for existing city-scoped queries)
+  // Physical branch this order was placed at (see Branch model).
+  branchId        String
+  branchRef       Branch      @relation(fields: [branchId], references: [id])
   pagerNumber     Int
   total           Int
   paymentMethod   String // cash | card
@@ -132,7 +157,7 @@ model Order {
   @@index([status])
   @@index([eventId])
   @@index([branch])
-  @@index([branch, location])
+  @@index([branchId])
 }
 
 model OrderItem {
@@ -431,16 +456,15 @@ model DailyNeedsLog {
   @@index([branch])
 }
 
-// ----------------------- App settings (singleton) -----------------------
-// Configurable business/operating hours, used by the business-day reporting
-// logic (lib/businessDay.ts). A single row (id = 1) holds the current values;
-// `openHour` is when a trading day begins (e.g. 17 = 5 PM) and `closeHour` when
-// it ends (e.g. 1 = 1 AM). When closeHour <= openHour the close lands on the
-// NEXT calendar day, so one business day spans two dates. Admin-editable from
-// the Staff page; everything else reads it through getBusinessHours().
-model BusinessHours {
-  id        Int      @id @default(1)
-  openHour  Int      @default(17)
-  closeHour Int      @default(1)
-  updatedAt DateTime @updatedAt
+// ----------------------- Cash baseline (per city, go-live reset) -----------------------
+// Cash activity (sales/expenses/safe/withdrawals) before `baselineAt` never
+// counts toward Expected Cash on Hand / Cash Tracking — lets the owner "zero
+// out" the figure at go-live despite historical orders already being in the
+// system. null = no floor (all-time, today's behavior).
+model CashSettings {
+  id         String    @id @default(cuid())
+  branch     String    @unique // "suli" | "erbil" (city)
+  baselineAt DateTime?
+  updatedAt  DateTime  @updatedAt
 }
+

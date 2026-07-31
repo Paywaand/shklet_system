@@ -25,7 +25,7 @@ export async function POST(req: Request) {
   }
 
   // Usernames are stored lowercased at creation, so match case-insensitively.
-  const user = await prisma.user.findUnique({ where: { username: uname } });
+  const user = await prisma.user.findUnique({ where: { username: uname }, include: { branch: true } });
 
   // Record the failure (so the NEXT request's up-front check can block once the
   // limit is reached) and return a normal 401. This allows the full quota of
@@ -53,7 +53,8 @@ export async function POST(req: Request) {
       username: user.username,
       fullName: user.fullName,
       role: user.role as Role,
-      branch: user.branch ?? null,
+      branch: user.branch?.city ?? null,
+      branchId: user.branchId,
     },
     { userAgent: req.headers.get("user-agent"), ip: clientIp(req) }
   );
@@ -61,6 +62,13 @@ export async function POST(req: Request) {
   await audit(user.id, `Logged in`);
 
   return NextResponse.json({
-    user: { id: user.id, username: user.username, fullName: user.fullName, role: user.role, branch: user.branch },
+    user: {
+      id: user.id,
+      username: user.username,
+      fullName: user.fullName,
+      role: user.role,
+      branch: user.branch?.city ?? null,
+      branchId: user.branchId,
+    },
   });
 }

@@ -11,10 +11,15 @@ export type Session = {
   username: string;
   fullName: string;
   role: Role;
-  // Branch this account is bound to ("suli" | "erbil"), or null for the super
-  // admin (all branches). Baked into the token so every API route can hard-scope
+  // City this account is bound to ("suli" | "erbil"), or null for the super
+  // admin (all branches/cities). Derived from the physical branch's `city` at
+  // login and baked into the token so every city-scoped API route can hard-scope
   // its queries without an extra DB lookup.
   branch: string | null;
+  // Physical branch (Branch.id) this account is bound to, or null for the super
+  // admin. Baked into the token the same way `branch` (city) is — see
+  // activeBranchId() in branchScope.ts.
+  branchId: string | null;
   sid: string; // server-side Session row id (enables revocation)
 };
 
@@ -44,7 +49,14 @@ async function signToken(payload: Session): Promise<string> {
 // The token is only a *reference* to the server-side row, so the row can be
 // deleted at any time to revoke the session instantly.
 export async function createSession(
-  user: { id: string; username: string; fullName: string; role: Role; branch: string | null },
+  user: {
+    id: string;
+    username: string;
+    fullName: string;
+    role: Role;
+    branch: string | null; // city, derived from the assigned Branch's `city`
+    branchId: string | null; // physical branch id
+  },
   meta?: { userAgent?: string | null; ip?: string | null }
 ): Promise<string> {
   const expiresAt = new Date(Date.now() + sessionDays() * 24 * 60 * 60 * 1000);
@@ -62,6 +74,7 @@ export async function createSession(
     fullName: user.fullName,
     role: user.role,
     branch: user.branch ?? null,
+    branchId: user.branchId ?? null,
     sid: row.id,
   });
 }
@@ -77,6 +90,7 @@ export async function verifySessionToken(token: string): Promise<(TokenPayload &
       fullName: String(payload.fullName),
       role: payload.role as Role,
       branch: typeof payload.branch === "string" ? payload.branch : null,
+      branchId: typeof payload.branchId === "string" ? payload.branchId : null,
       sid: payload.sid ? String(payload.sid) : undefined,
     };
   } catch {
@@ -109,6 +123,7 @@ export async function getSession(): Promise<Session | null> {
     fullName: decoded.fullName,
     role: decoded.role,
     branch: decoded.branch ?? null,
+    branchId: decoded.branchId ?? null,
     sid: decoded.sid,
   };
 }

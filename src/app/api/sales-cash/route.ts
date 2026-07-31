@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authorize } from "@/lib/guard";
-import { activeBranch } from "@/lib/branchScope";
+import { activeBranch, activeBranchId } from "@/lib/branchScope";
 import { monthRange } from "@/lib/cash";
 import { getBusinessHours } from "@/lib/businessHours";
+import { getCashBaseline, clampToBaseline } from "@/lib/cashSettings";
 
 // GET /api/sales-cash?from=ISO&to=ISO
 //
@@ -16,6 +17,7 @@ export async function GET(req: Request) {
   const guard = await authorize("analytics.view");
   if (!guard.ok) return guard.response;
   const branch = await activeBranch(guard.session);
+  const branchId = await activeBranchId(guard.session);
 
   const url = new URL(req.url);
   const fromParam = url.searchParams.get("from");
@@ -23,10 +25,14 @@ export async function GET(req: Request) {
   const eventIdParam = url.searchParams.get("eventId");
   const eventId =
     eventIdParam && eventIdParam !== "all" ? (eventIdParam === "main" ? null : eventIdParam) : undefined;
-  const { gte, lte } =
+  const { gte: rawGte, lte } =
     fromParam || toParam
       ? { gte: fromParam ? new Date(fromParam) : undefined, lte: toParam ? new Date(toParam) : undefined }
-      : monthRange(new Date(), await getBusinessHours());
+      : monthRange(new Date(), await getBusinessHours(branchId));
+  // Never let cash activity before the go-live baseline count, even for a
+  // custom range that spans further back.
+  const baseline = await getCashBaseline(branch);
+  const gte = clampToBaseline(rawGte, baseline);
 
   const [cashOrders, expensesBySource, safeEntries, managerWithdrawn, cashAdjustments] = await Promise.all([
     // Branch orders paid by cash (delivery platforms excluded — separate tables). Cancelled
@@ -48,14 +54,18 @@ export async function GET(req: Request) {
       where: { branch, date: { gte, lte }, ...(eventId !== undefined ? { eventId } : {}) },
       _sum: { amount: true },
     }),
-    // Safe is a running balance — all deposits count (matches Cash Tracking).
-    prisma.safeEntry.aggregate({ where: { branch }, _sum: { amount: true } }),
+    // Safe is a running balance — all deposits since the baseline count (matches Cash Tracking).
+    prisma.safeEntry.aggregate({
+      where: { branch, ...(baseline ? { date: { gte: baseline } } : {}) },
+      _sum: { amount: true },
+    }),
     // Manager-sourced withdrawals (cash handed directly to a person) leave the
-    // manager's drawer, so they draw down Expected Cash on Hand. All-time, matching
-    // the safe running balance. Safe-sourced withdrawals do NOT affect this figure —
-    // that money already left the manager when it went into the safe.
+    // manager's drawer, so they draw down Expected Cash on Hand. Since the
+    // baseline, matching the safe running balance. Safe-sourced withdrawals do
+    // NOT affect this figure — that money already left the manager when it
+    // went into the safe.
     prisma.cashWithdrawal.aggregate({
-      where: { branch, source: "manager" },
+      where: { branch, source: "manager", ...(baseline ? { date: { gte: baseline } } : {}) },
       _sum: { amount: true },
     }),
     // Historical cash that never passed through the POS (e.g. pre-system-activation

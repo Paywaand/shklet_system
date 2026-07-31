@@ -25,7 +25,6 @@ import { iqd, num, duration, shortTime, itemName } from "@/lib/format";
 import type { MenuItem, ModifierGroup, Order, DeliveryOrder } from "@/lib/types";
 import { usePosOffline } from "@/lib/offline/usePosOffline";
 import { ModifiersSchema, safeParseJson } from "@/lib/schemas";
-import { ACTIVE_BRANCH_COOKIE, DEFAULT_LOCATION, LOCATION_LABELS, LOCATIONS, isBranch } from "@/lib/branches";
 import type { PaymentMethod } from "@/lib/paymentMethods";
 import { Loading, ErrorState, EmptyState, Modal } from "@/components/ui";
 import { Elapsed } from "@/components/Elapsed";
@@ -47,18 +46,6 @@ const DELIVERY_COLOR_FALLBACK = "#0fb79b";
 type OrderType = "walkin" | "delivery" | "takeaway";
 type DeliveryPlatform = { platformName: string; commissionPct: number; color: string };
 
-// Reads the active-city cookie the sidebar switcher writes (client-only; the
-// page itself is a client component so it can't read the server-resolved
-// branch directly). Falls back to Sulaymaniyah.
-function readActiveCity(): "suli" | "erbil" {
-  if (typeof document === "undefined") return "suli";
-  const match = document.cookie.match(new RegExp(`${ACTIVE_BRANCH_COOKIE}=([^;]+)`));
-  const value = match?.[1];
-  return isBranch(value) ? value : "suli";
-}
-
-const LOCATION_STORAGE_KEY = "shklet_location";
-
 function parseModifiers(json: string | null): ModifierGroup[] {
   // Bounded + schema-validated parse (size cap before JSON.parse) — see lib/schemas.ts.
   return safeParseJson(json, ModifiersSchema, []);
@@ -67,25 +54,11 @@ function parseModifiers(json: string | null): ModifierGroup[] {
 export default function CashierPage() {
   // Offline-capable data + mutations for branch walk-in orders (menu, active queue,
   // place/ready/collected). Delivery + events stay on normal online fetches.
-  const [branch, setBranch] = useState<string>(""); // "" = main 60 Street Branch
-  // Physical branch within Sulaymaniyah ("1" | "2"); stays null for Erbil,
-  // which has one location. Persisted per-device (localStorage) — in practice
-  // each physical location keeps its own tablet.
-  const [city, setCity] = useState<"suli" | "erbil">("suli");
-  const [location, setLocationState] = useState<string | null>(DEFAULT_LOCATION.suli);
-  useEffect(() => {
-    const c = readActiveCity();
-    setCity(c);
-    const saved = window.localStorage.getItem(LOCATION_STORAGE_KEY);
-    setLocationState(
-      saved && (LOCATIONS[c] as readonly string[]).includes(saved) ? saved : DEFAULT_LOCATION[c]
-    );
-  }, []);
-  function chooseLocation(next: string) {
-    setLocationState(next);
-    window.localStorage.setItem(LOCATION_STORAGE_KEY, next);
-  }
-  const pos = usePosOffline(branch, location);
+  const [branch, setBranch] = useState<string>(""); // "" = main branch (this is the event selector, not a city/physical branch)
+  // Physical-branch scoping now happens entirely server-side (activeBranchId) —
+  // branch-bound staff are fixed automatically; the super admin picks a branch
+  // from the Sidebar switcher.
+  const pos = usePosOffline(branch);
   const events = useFetch<{ events: { id: string; name: string }[] }>("/api/events/active");
   // Which delivery app this branch uses (Toters in Suli, Talabat in Erbil) + its
   // accent color. Loaded once; the POS only needs the label/color — the commission
@@ -173,7 +146,6 @@ export default function CashierPage() {
           orderType: orderType === "takeaway" ? "takeaway" : "walk_in",
           isPaid,
           eventId: branch || null,
-          location,
           items: lineItemsPayload(),
         });
         if (!res.ok) return toast.show(res.error, "error");
@@ -316,23 +288,6 @@ export default function CashierPage() {
             ))}
           </select>
         </div>
-        {city === "suli" && LOCATIONS.suli.length > 0 && (
-          <div className="flex items-center gap-1 rounded-xl border border-black/10 dark:border-white/10 p-1">
-            {LOCATIONS.suli.map((loc) => (
-              <button
-                key={loc}
-                type="button"
-                onClick={() => chooseLocation(loc)}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-xs font-bold transition",
-                  location === loc ? "bg-corn text-white" : "opacity-60 hover:opacity-100"
-                )}
-              >
-                {LOCATION_LABELS[loc]}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {pos.needsAttention.length > 0 && (

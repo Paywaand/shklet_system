@@ -235,7 +235,8 @@ export type StaffMember = {
   username: string;
   fullName: string;
   role: "admin" | "manager" | "cashier";
-  branch: "suli" | "erbil" | null; // null = super admin (all branches)
+  branchId: string | null; // null = super admin (all branches)
+  branch: { id: string; name: string; city: string } | null;
   active: boolean;
   salary: number | null;
   createdAt: string;

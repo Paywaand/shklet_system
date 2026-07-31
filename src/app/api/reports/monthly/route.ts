@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authorize } from "@/lib/guard";
-import { activeBranch } from "@/lib/branchScope";
+import { activeBranch, activeBranchId } from "@/lib/branchScope";
 import { branchLabel } from "@/lib/branches";
 import { getDeliverySettings } from "@/lib/delivery";
 import { MIN_PREP_SECONDS, MAX_PREP_SECONDS } from "@/lib/prepTime";
@@ -18,6 +18,7 @@ export async function GET(req: Request): Promise<NextResponse> {
   const guard = await authorize("reports.view");
   if (!guard.ok) return guard.response;
   const branch = await activeBranch(guard.session);
+  const branchId = await activeBranchId(guard.session);
 
   const url = new URL(req.url);
   const from = url.searchParams.get("from");
@@ -64,7 +65,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       _sum: { totalCost: true },
     }),
     getDeliverySettings(branch),
-    getBusinessHours(),
+    getBusinessHours(branchId),
   ]);
 
   // ---- Sales summary ----

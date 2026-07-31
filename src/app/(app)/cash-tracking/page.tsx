@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Lock, Trash2, Plus, ArrowUpFromLine, Users, History } from "lucide-react";
+import { Lock, Trash2, Plus, ArrowUpFromLine, Users, History, RotateCcw } from "lucide-react";
 import { useFetch, apiSend } from "@/lib/client";
 import { iqd, shortDate, localMonthKey, monthLabel } from "@/lib/format";
 import type { CashTracking, CashLogEntry, WithdrawalLogEntry } from "@/lib/types";
@@ -43,8 +43,71 @@ export default function CashTrackingPage() {
   return (
     <>
       <PageHeader title="Cash Tracking" subtitle="Safe balance & withdrawals — admin only" />
+      <CashBaselineCard />
       <CashTrackingSection data={data} onChanged={reload} />
     </>
+  );
+}
+
+// Reset point for "Expected Cash on Hand" — cash activity (sales, expenses,
+// safe entries, withdrawals) before this instant never counts, regardless of
+// what date range is picked. Use this once at go-live so historical/imported
+// orders don't inflate the figure.
+function CashBaselineCard() {
+  const { data, reload } = useFetch<{ baselineAt: string | null }>("/api/cash-settings");
+  const toast = useToast();
+  const [saving, setSaving] = useState(false);
+  const baselineAt = data?.baselineAt ?? null;
+
+  async function resetFromNow() {
+    if (!confirm("Reset Expected Cash on Hand from right now? Nothing before this moment will count anymore.")) return;
+    setSaving(true);
+    try {
+      await apiSend("/api/cash-settings", "PUT", { baselineAt: new Date().toISOString() });
+      toast.show("Expected Cash on Hand reset");
+      reload();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clearBaseline() {
+    setSaving(true);
+    try {
+      await apiSend("/api/cash-settings", "PUT", { baselineAt: null });
+      toast.show("Baseline cleared — back to all-time");
+      reload();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card p-4 mb-4">
+      <div className="flex items-center gap-2 mb-1">
+        <RotateCcw size={18} className="text-leaf" />
+        <h2 className="font-extrabold">Expected Cash on Hand baseline</h2>
+      </div>
+      <p className="text-xs opacity-60 mb-3">
+        {baselineAt
+          ? `Cash activity before ${shortDate(baselineAt)} is excluded from Expected Cash on Hand.`
+          : "No baseline set — Expected Cash on Hand counts all-time cash activity."}
+      </p>
+      <div className="flex gap-2">
+        <button className="btn-primary px-3 py-2 text-sm" onClick={resetFromNow} disabled={saving}>
+          <RotateCcw size={14} /> Reset from today
+        </button>
+        {baselineAt && (
+          <button className="btn-ghost px-3 py-2 text-sm" onClick={clearBaseline} disabled={saving}>
+            Clear baseline
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

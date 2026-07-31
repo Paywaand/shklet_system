@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authorize, audit } from "@/lib/guard";
 import { generateUniqueOrderShortId } from "@/lib/shortId";
-import { activeBranch } from "@/lib/branchScope";
-import { isValidLocation } from "@/lib/branches";
+import { activeBranch, activeBranchId } from "@/lib/branchScope";
 import { isPaymentMethod } from "@/lib/paymentMethods";
 
 // POST /api/orders — place a new order (POS).
@@ -11,9 +10,9 @@ export async function POST(req: Request) {
   const guard = await authorize("pos.use");
   if (!guard.ok) return guard.response;
   const branch = await activeBranch(guard.session);
+  const branchId = await activeBranchId(guard.session);
 
   const body = await req.json().catch(() => ({}));
-  const location = isValidLocation(branch, body.location) ? body.location ?? null : null;
   const pagerNumber = Number(body.pagerNumber);
   const paymentMethod = body.paymentMethod;
   // Default "walk_in" for backward compatibility with any old clients that don't send it.
@@ -47,10 +46,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Add at least one item" }, { status: 400 });
 
   // Reject if this pager is already in use by an uncollected order at THIS
-  // physical location (each branch location has its own physical pager set —
-  // Sulaymaniyah's two branches can use the same pager number at once).
+  // physical branch (each branch has its own physical pager set — Sulaymaniyah's
+  // two branches can use the same pager number at once).
   const inUse = await prisma.order.findFirst({
-    where: { branch, location, pagerNumber, status: { in: ["pending", "ready"] } },
+    where: { branchId, pagerNumber, status: { in: ["pending", "ready"] } },
   });
   if (inUse)
     return NextResponse.json(
@@ -86,7 +85,7 @@ export async function POST(req: Request) {
       shortId,
       clientId,
       branch,
-      location,
+      branchId,
       pagerNumber,
       paymentMethod,
       orderType,

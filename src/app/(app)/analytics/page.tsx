@@ -85,9 +85,12 @@ export default function AnalyticsPage() {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [eventId, setEventId] = useState("all");
+  const [branchId, setBranchId] = useState("all");
 
   const { data: eventsData } = useFetch<{ events: { id: string; name: string }[] }>("/api/events/active");
   const events = eventsData?.events ?? [];
+  const { data: branchesData } = useFetch<{ branches: { id: string; name: string }[] }>("/api/branches");
+  const branches = branchesData?.branches ?? [];
 
   // Build the fetch URL only when the filter inputs change. Without this memo,
   // rangeToDates() would produce a fresh `now` timestamp on every render, changing
@@ -98,8 +101,9 @@ export default function AnalyticsPage() {
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
     if (eventId !== "all") qs.set("eventId", eventId);
+    if (branchId !== "all") qs.set("branchId", branchId);
     return `/api/analytics?${qs.toString()}`;
-  }, [range, customFrom, customTo, businessHours, eventId]);
+  }, [range, customFrom, customTo, businessHours, eventId, branchId]);
   const { data, loading, error, reload } = useFetch<Analytics>(url);
 
   // Expected Cash on Hand (manager + admin). Defaults to the current business
@@ -235,6 +239,20 @@ export default function AnalyticsPage() {
             </option>
           ))}
         </select>
+        {branches.length > 1 && (
+          <select
+            className="input py-2 w-auto"
+            value={branchId}
+            onChange={(e) => setBranchId(e.target.value)}
+          >
+            <option value="all">All branches</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* Expected Cash on Hand (manager + admin). The detailed admin-only Cash

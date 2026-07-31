@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authorize } from "@/lib/guard";
-import { activeBranch } from "@/lib/branchScope";
+import { activeBranch, activeBranchId } from "@/lib/branchScope";
 import { countsTowardPrepAvg } from "@/lib/prepTime";
 import { localHour, businessDayKey } from "@/lib/format";
 import { getBusinessHours } from "@/lib/businessHours";
@@ -11,13 +11,23 @@ export async function GET(req: Request) {
   const guard = await authorize("analytics.view");
   if (!guard.ok) return guard.response;
   const branch = await activeBranch(guard.session);
+  const branchId = await activeBranchId(guard.session);
 
   const url = new URL(req.url);
   const from = url.searchParams.get("from");
   const to = url.searchParams.get("to");
   const eventId = url.searchParams.get("eventId");
+  // Optional branch selector — "all" (default) spans every branch in the
+  // current city; a specific branch id scopes to just that branch.
+  const branchIdParam = url.searchParams.get("branchId");
 
-  const where: { branch: string; placedAt?: { gte?: Date; lte?: Date }; eventId?: string | null } = { branch };
+  const where: {
+    branch: string;
+    branchId?: string;
+    placedAt?: { gte?: Date; lte?: Date };
+    eventId?: string | null;
+  } = { branch };
+  if (branchIdParam && branchIdParam !== "all") where.branchId = branchIdParam;
   if (from || to) {
     where.placedAt = {};
     if (from) where.placedAt.gte = new Date(from);
@@ -36,7 +46,7 @@ export async function GET(req: Request) {
       orderBy: { placedAt: "desc" },
       include: { items: true, staff: { select: { fullName: true } } },
     }),
-    getBusinessHours(),
+    getBusinessHours(branchId),
   ]);
 
   // Cancelled orders never took money and must not count as sales.

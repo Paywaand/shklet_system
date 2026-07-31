@@ -5,7 +5,15 @@ import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 const SAUCE = JSON.stringify([
-  { name: "Sauce", required: true, options: ["Sweet Sauce", "Sour Sauce", "Half & Half"] },
+  {
+    name: "Sauce",
+    required: true,
+    options: [
+      { label: "Sweet Sauce", price: 0 },
+      { label: "Sour Sauce", price: 0 },
+      { label: "Half & Half", price: 500 },
+    ],
+  },
 ]);
 
 function at(daysAgo: number, hour: number, min = 0) {
@@ -100,6 +108,9 @@ async function main() {
   });
 
   // ---- Branch orders (history for analytics) ----
+  const demoBranch = await prisma.branch.findFirst({ where: { city: "suli" }, orderBy: { sortOrder: "asc" } });
+  if (!demoBranch) throw new Error('No Suli branch found — run "npm run seed" first to create the physical branches.');
+
   const menuPool = [SWEET, EXTREME, FLAMING, COLA, LEM, RIBS6];
   let n = 0;
   const makeOrder = async (daysAgo: number, hour: number, opts: { eventId?: string; status?: string } = {}) => {
@@ -117,6 +128,7 @@ async function main() {
     const dur = 120 + ((n * 37) % 480);
     await prisma.order.create({
       data: {
+        branchId: demoBranch.id,
         pagerNumber: ((n * 3) % 30) + 1,
         total,
         paymentMethod: n % 5 === 0 ? "card" : "cash",

@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { authorize, audit } from "@/lib/guard";
-import { isBranch } from "@/lib/branches";
 
 // POST /api/staff/:id/password { password } — admin resets a staff member's password.
 export async function POST(req: Request, props: { params: Promise<{ id: string }> }) {
@@ -13,7 +12,7 @@ export async function POST(req: Request, props: { params: Promise<{ id: string }
   // A branch-bound user with staff.manage may only reset passwords in their own branch.
   const target = await prisma.user.findUnique({ where: { id: params.id } });
   if (!target) return NextResponse.json({ error: "Staff member not found" }, { status: 404 });
-  if (isBranch(guard.session.branch) && target.branch !== guard.session.branch)
+  if (guard.session.branchId && target.branchId !== guard.session.branchId)
     return NextResponse.json({ error: "Staff member not found" }, { status: 404 });
 
   const { password } = await req.json().catch(() => ({}));

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authorize, audit } from "@/lib/guard";
-import { activeBranch } from "@/lib/branchScope";
+import { activeBranch, activeBranchId } from "@/lib/branchScope";
 import type { Branch } from "@/lib/branches";
 import { monthRange } from "@/lib/cash";
 import { getBusinessHours } from "@/lib/businessHours";
+import { getCashBaseline, clampToBaseline } from "@/lib/cashSettings";
 import { WithdrawalInputSchema } from "@/lib/schemas";
 
 // Admin-only cash reconciliation for the Sales page. Two kinds of record live here:
@@ -27,21 +28,21 @@ function ensureAdmin(role: string) {
   return role === "admin";
 }
 
-function loadSafeEntries(branch: Branch) {
-  // Safe is a running balance — all deposits count. The full list is returned to the
-  // client (the ledger UI), so this stays a findMany.
+function loadSafeEntries(branch: Branch, baseline: Date | null) {
+  // Safe is a running balance — all deposits since the baseline count. The full
+  // list is returned to the client (the ledger UI), so this stays a findMany.
   return prisma.safeEntry.findMany({
-    where: { branch },
+    where: { branch, ...(baseline ? { date: { gte: baseline } } : {}) },
     orderBy: { date: "desc" },
     include: { createdBy: { select: { fullName: true } } },
   });
 }
 
-function loadWithdrawals(branch: Branch) {
-  // All-time list, same convention as safeEntries. Totals + per-source sums are
-  // derived from this one query in JS (the list is small).
+function loadWithdrawals(branch: Branch, baseline: Date | null) {
+  // Since the baseline, same convention as safeEntries. Totals + per-source
+  // sums are derived from this one query in JS (the list is small).
   return prisma.cashWithdrawal.findMany({
-    where: { branch },
+    where: { branch, ...(baseline ? { date: { gte: baseline } } : {}) },
     orderBy: { date: "desc" },
     include: { createdBy: { select: { fullName: true } } },
   });
@@ -74,12 +75,14 @@ type CashState = {
 
 // Single source of truth for the four reconciliation figures, shared by GET (to
 // render) and POST (to enforce the per-source max before creating a withdrawal).
-async function computeCashState(branch: Branch): Promise<CashState> {
-  const { gte, lte } = monthRange(new Date(), await getBusinessHours());
+async function computeCashState(branch: Branch, branchId: string): Promise<CashState> {
+  const { gte: rawGte, lte } = monthRange(new Date(), await getBusinessHours(branchId));
+  const baseline = await getCashBaseline(branch);
+  const gte = clampToBaseline(rawGte, baseline);
 
   const [safeEntries, withdrawals, cashAdjustments, cashOrders, expensesBySource] = await Promise.all([
-    loadSafeEntries(branch),
-    loadWithdrawals(branch),
+    loadSafeEntries(branch, baseline),
+    loadWithdrawals(branch, baseline),
     loadCashAdjustments(branch),
     // Cancelled orders never took money and must not count as sales.
     prisma.order.aggregate({
@@ -144,8 +147,9 @@ export async function GET() {
   if (!ensureAdmin(guard.session.role))
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const branch = await activeBranch(guard.session);
+  const branchId = await activeBranchId(guard.session);
 
-  const state = await computeCashState(branch);
+  const state = await computeCashState(branch, branchId);
 
   return NextResponse.json({
     safeEntries: state.safeEntries,
@@ -175,6 +179,7 @@ export async function POST(req: Request) {
   if (!ensureAdmin(guard.session.role))
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const branch = await activeBranch(guard.session);
+  const branchId = await activeBranchId(guard.session);
 
   const body = await req.json().catch(() => ({}));
 
@@ -206,7 +211,7 @@ export async function POST(req: Request) {
     const { amount, source, recipient, date, note } = parsed.data;
 
     // Enforce the per-source max so a withdrawal can never drive a balance negative.
-    const state = await computeCashState(branch);
+    const state = await computeCashState(branch, branchId);
     const available = source === "safe" ? state.safeTotal : state.managerHolds;
     if (amount > available)
       return NextResponse.json(

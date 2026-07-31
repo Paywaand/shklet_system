@@ -29,10 +29,19 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { useSession } from "@/lib/session";
-import { apiSend } from "@/lib/client";
+import { apiSend, useFetch } from "@/lib/client";
 import type { PermissionKey } from "@/lib/permissions";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
-import { ACTIVE_BRANCH_COOKIE, BRANCHES, BRANCH_LABELS, isBranch, type Branch } from "@/lib/branches";
+import {
+  ACTIVE_BRANCH_COOKIE,
+  ACTIVE_BRANCH_ID_COOKIE,
+  BRANCHES,
+  BRANCH_LABELS,
+  isBranch,
+  type Branch,
+} from "@/lib/branches";
+
+type BranchRow = { id: string; name: string; city: string; active: boolean };
 
 type NavItem = {
   href: string;
@@ -47,7 +56,15 @@ type NavItem = {
 
 type NavGroup = { title: string; items: NavItem[] };
 
-export function Sidebar({ lowStockCount, activeBranch }: { lowStockCount?: number; activeBranch?: Branch }) {
+export function Sidebar({
+  lowStockCount,
+  activeBranch,
+  activeBranchId,
+}: {
+  lowStockCount?: number;
+  activeBranch?: Branch;
+  activeBranchId?: string;
+}) {
   const { user, can } = useSession();
   const { lang, setLang, t } = useLanguage();
   const pathname = usePathname();
@@ -56,6 +73,11 @@ export function Sidebar({ lowStockCount, activeBranch }: { lowStockCount?: numbe
   const [dark, setDark] = useState(
     typeof document !== "undefined" && document.documentElement.classList.contains("dark")
   );
+  // Physical branches within the current city — used both for the super
+  // admin's branch picker and to look up the branch-bound user's own branch name.
+  const branchesFetch = useFetch<{ branches: BranchRow[] }>("/api/branches");
+  const branches = branchesFetch.data?.branches ?? [];
+  const ownBranchName = branches.find((b) => b.id === user.branchId)?.name;
 
   // Lock background scroll while the mobile drawer is open so touch scrolling
   // stays inside the drawer (and can reach Sign out / Roles at the bottom).
@@ -78,6 +100,13 @@ export function Sidebar({ lowStockCount, activeBranch }: { lowStockCount?: numbe
     setOpen(false);
     router.refresh();
     // Full reload so every fetched dataset (menu, queue, analytics…) re-scopes.
+    window.location.reload();
+  }
+
+  function switchBranchId(next: string) {
+    document.cookie = `${ACTIVE_BRANCH_ID_COOKIE}=${next}; path=/; max-age=${60 * 60 * 24 * 365}; samesite=lax`;
+    setOpen(false);
+    router.refresh();
     window.location.reload();
   }
 
@@ -197,28 +226,47 @@ export function Sidebar({ lowStockCount, activeBranch }: { lowStockCount?: numbe
         <Image src="/brand/logo_text.png" alt="Shklet" width={140} height={40} className="h-7 w-auto" />
       </div>
 
-      {/* Branch indicator / switcher */}
-      <div className="mb-4">
+      {/* City + physical-branch indicator / switcher */}
+      <div className="mb-4 flex flex-col gap-1.5">
         {isSuperAdmin ? (
-          <div className="grid grid-cols-2 gap-1 rounded-xl bg-black/5 dark:bg-white/10 p-1">
-            {BRANCHES.map((b) => (
-              <button
-                key={b}
-                onClick={() => activeBranch !== b && switchBranch(b)}
-                className={clsx(
-                  "rounded-lg px-2 py-1.5 text-xs font-bold transition",
-                  activeBranch === b ? "bg-corn text-white" : "opacity-60 hover:opacity-100"
-                )}
-              >
-                {BRANCH_LABELS[b]}
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-2 gap-1 rounded-xl bg-black/5 dark:bg-white/10 p-1">
+              {BRANCHES.map((b) => (
+                <button
+                  key={b}
+                  onClick={() => activeBranch !== b && switchBranch(b)}
+                  className={clsx(
+                    "rounded-lg px-2 py-1.5 text-xs font-bold transition",
+                    activeBranch === b ? "bg-corn text-white" : "opacity-60 hover:opacity-100"
+                  )}
+                >
+                  {BRANCH_LABELS[b]}
+                </button>
+              ))}
+            </div>
+            {branches.length > 0 && (
+              <div className="flex flex-col gap-1 rounded-xl bg-black/5 dark:bg-white/10 p-1">
+                {branches.map((b) => (
+                  <button
+                    key={b.id}
+                    onClick={() => activeBranchId !== b.id && switchBranchId(b.id)}
+                    className={clsx(
+                      "rounded-lg px-2 py-1.5 text-xs font-bold text-left transition",
+                      activeBranchId === b.id ? "bg-corn text-white" : "opacity-60 hover:opacity-100"
+                    )}
+                  >
+                    {b.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
         ) : (
           isBranch(user.branch) && (
-            <p className="text-center text-xs font-bold uppercase tracking-wider opacity-50">
-              {BRANCH_LABELS[user.branch]}
-            </p>
+            <div className="text-center">
+              <p className="text-xs font-bold uppercase tracking-wider opacity-50">{BRANCH_LABELS[user.branch]}</p>
+              {ownBranchName && <p className="text-xs font-bold opacity-70">{ownBranchName}</p>}
+            </div>
           )
         )}
       </div>

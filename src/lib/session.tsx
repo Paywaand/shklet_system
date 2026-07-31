@@ -11,6 +11,8 @@ export type CurrentUser = {
   role: Role;
   // "suli" | "erbil" for branch-bound staff, null for the super admin.
   branch: string | null;
+  // Physical branch id (Branch.id) for branch-bound staff, null for the super admin.
+  branchId: string | null;
 };
 
 type SessionValue = {

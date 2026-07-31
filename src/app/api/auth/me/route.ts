@@ -19,6 +19,7 @@ export async function GET() {
       fullName: session.fullName,
       role: session.role,
       branch: session.branch,
+      branchId: session.branchId,
     },
     permissions: grants.map((g) => g.key),
   });

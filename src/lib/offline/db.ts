@@ -20,7 +20,6 @@ export type CreatePayload = {
   orderType: "walk_in" | "takeaway";
   isPaid: boolean;
   eventId: string | null;
-  location: string | null;
   items: OfflineLineItem[];
 };
 

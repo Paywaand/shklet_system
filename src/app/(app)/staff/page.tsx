@@ -2,17 +2,27 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { UserPlus, Pencil, KeyRound, Power, Clock, Save } from "lucide-react";
+import { UserPlus, Pencil, KeyRound, Power, Clock, Save, Plus, Building2 } from "lucide-react";
 import { useFetch, apiSend } from "@/lib/client";
 import { shortDate, iqd } from "@/lib/format";
 import type { StaffMember } from "@/lib/types";
 import { ROLES } from "@/lib/permissions";
 import { useSession } from "@/lib/session";
-import { BRANCH_LABELS, BRANCHES, isBranch } from "@/lib/branches";
 import { closesNextDay } from "@/lib/businessDay";
 import { PageHeader } from "@/components/PageHeader";
 import { Loading, ErrorState, EmptyState, Modal } from "@/components/ui";
 import { useToast } from "@/components/Toast";
+
+type BranchRow = {
+  id: string;
+  name: string;
+  city: string;
+  openHour: number;
+  closeHour: number;
+  sortOrder: number;
+  active: boolean;
+  closesNextDay: boolean;
+};
 
 export default function StaffPage() {
   const { data, loading, error, reload } = useFetch<{ staff: StaffMember[] }>("/api/staff");
@@ -51,7 +61,7 @@ export default function StaffPage() {
         }
       />
 
-      {isAdmin && <BusinessHoursCard />}
+      {isAdmin && <ManageBranchesCard />}
 
       {isAdmin && (
         <div className="card p-4 mb-4">
@@ -89,8 +99,8 @@ export default function StaffPage() {
                     <span className="chip bg-black/10 dark:bg-white/10">{m.role}</span>
                   </td>
                   <td className="p-3">
-                    {isBranch(m.branch) ? (
-                      <span className="chip bg-corn/15 text-corn-600">{BRANCH_LABELS[m.branch]}</span>
+                    {m.branch ? (
+                      <span className="chip bg-corn/15 text-corn-600">{m.branch.name}</span>
                     ) : (
                       <span className="chip bg-leaf/15 text-leaf">All branches</span>
                     )}
@@ -156,22 +166,79 @@ function hourLabel(h: number): string {
   return `${twelve}:00 ${period}`;
 }
 
-// Admin-only operating-hours editor. Opening/closing hours drive every
-// business-day report boundary (see lib/businessDay.ts). When the closing hour
-// is at or before the opening hour it falls on the NEXT calendar day (e.g. open
-// 5 PM, close 1 AM) — surfaced explicitly so a late close isn't mistaken for the
-// same afternoon.
-function BusinessHoursCard() {
-  const { businessHours } = useSession();
+// Admin-only: manage the physical branches in the current city — rename, edit
+// each branch's operating hours (drives its business-day report boundary, see
+// lib/businessDay.ts), reorder, add a new branch. Staff assignment and orders
+// are scoped to these branches; hours are per-branch, not global.
+function ManageBranchesCard() {
+  const { data, reload } = useFetch<{ branches: BranchRow[] }>("/api/branches");
   const router = useRouter();
   const toast = useToast();
-  const [openHour, setOpenHour] = useState(businessHours.openHour);
-  const [closeHour, setCloseHour] = useState(businessHours.closeHour);
+  const [newName, setNewName] = useState("");
+  const [adding, setAdding] = useState(false);
+  const branches = data?.branches ?? [];
+
+  async function addBranch() {
+    const name = newName.trim();
+    if (!name) return;
+    setAdding(true);
+    try {
+      await apiSend("/api/branches", "POST", { name });
+      setNewName("");
+      toast.show("Branch added");
+      reload();
+      router.refresh();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  return (
+    <div className="card p-4 mb-4">
+      <div className="flex items-center gap-2 mb-1">
+        <Building2 size={18} className="text-leaf" />
+        <h2 className="font-extrabold">Manage branches</h2>
+      </div>
+      <p className="text-xs opacity-60 mb-3">
+        Physical branches in this city. Each has its own operating hours — sales, profit and report
+        dates are grouped by its own window, so a sale just after midnight counts toward the night it
+        belongs to. Staff and orders are scoped to a specific branch.
+      </p>
+      <div className="flex flex-col gap-3">
+        {branches.map((b) => (
+          <BranchRowEditor key={b.id} branch={b} onSaved={() => { reload(); router.refresh(); }} />
+        ))}
+      </div>
+      <div className="flex items-end gap-2 mt-4 pt-3 border-t border-black/10 dark:border-white/10">
+        <div className="flex-1">
+          <label className="label">New branch name</label>
+          <input
+            className="input py-2"
+            placeholder="e.g. Downtown"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+          />
+        </div>
+        <button className="btn-primary px-3 py-2 text-sm" onClick={addBranch} disabled={adding || !newName.trim()}>
+          <Plus size={16} /> Add branch
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BranchRowEditor({ branch, onSaved }: { branch: BranchRow; onSaved: () => void }) {
+  const [name, setName] = useState(branch.name);
+  const [openHour, setOpenHour] = useState(branch.openHour);
+  const [closeHour, setCloseHour] = useState(branch.closeHour);
   const [saving, setSaving] = useState(false);
+  const toast = useToast();
 
   const nextDay = closesNextDay({ openHour, closeHour });
-  const dirty = openHour !== businessHours.openHour || closeHour !== businessHours.closeHour;
   const sameHour = openHour === closeHour;
+  const dirty = name !== branch.name || openHour !== branch.openHour || closeHour !== branch.closeHour;
 
   async function save() {
     if (sameHour) {
@@ -180,10 +247,9 @@ function BusinessHoursCard() {
     }
     setSaving(true);
     try {
-      await apiSend("/api/settings/business-hours", "PUT", { openHour, closeHour });
-      toast.show("Business hours updated");
-      // Reload the layout so the new hours flow into the session for every page.
-      router.refresh();
+      await apiSend(`/api/branches/${branch.id}`, "PATCH", { name, openHour, closeHour });
+      toast.show("Branch updated");
+      onSaved();
     } catch (e) {
       toast.show(e instanceof Error ? e.message : "Failed", "error");
     } finally {
@@ -191,25 +257,28 @@ function BusinessHoursCard() {
     }
   }
 
+  async function toggleActive() {
+    try {
+      await apiSend(`/api/branches/${branch.id}`, "PATCH", { active: !branch.active });
+      toast.show(branch.active ? "Branch deactivated" : "Branch activated");
+      onSaved();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+    }
+  }
+
   return (
-    <div className="card p-4 mb-4">
-      <div className="flex items-center gap-2 mb-1">
-        <Clock size={18} className="text-leaf" />
-        <h2 className="font-extrabold">Business hours</h2>
-      </div>
-      <p className="text-xs opacity-60 mb-3">
-        When a trading day opens and closes. All sales, profit and report dates are grouped by this
-        window, so a sale just after midnight counts toward the night it belongs to — not the new
-        calendar date.
-      </p>
-      <div className="flex flex-wrap items-end gap-4">
+    <div className="rounded-xl border border-black/10 dark:border-white/10 p-3">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex-1 min-w-[140px]">
+          <label className="label">Name</label>
+          <input className="input py-2" value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
         <div>
-          <label className="label">Opening hour</label>
-          <select
-            className="input py-2 w-auto"
-            value={openHour}
-            onChange={(e) => setOpenHour(Number(e.target.value))}
-          >
+          <label className="label">
+            <Clock size={12} className="inline mb-0.5" /> Opens
+          </label>
+          <select className="input py-2 w-auto" value={openHour} onChange={(e) => setOpenHour(Number(e.target.value))}>
             {Array.from({ length: 24 }, (_, h) => (
               <option key={h} value={h}>
                 {hourLabel(h)}
@@ -218,12 +287,8 @@ function BusinessHoursCard() {
           </select>
         </div>
         <div>
-          <label className="label">Closing hour</label>
-          <select
-            className="input py-2 w-auto"
-            value={closeHour}
-            onChange={(e) => setCloseHour(Number(e.target.value))}
-          >
+          <label className="label">Closes</label>
+          <select className="input py-2 w-auto" value={closeHour} onChange={(e) => setCloseHour(Number(e.target.value))}>
             {Array.from({ length: 24 }, (_, h) => (
               <option key={h} value={h}>
                 {hourLabel(h)}
@@ -232,12 +297,18 @@ function BusinessHoursCard() {
             ))}
           </select>
         </div>
-        <button className="btn-primary px-4 py-2.5 text-sm" onClick={save} disabled={saving || !dirty || sameHour}>
-          <Save size={16} /> Save hours
+        <button className="btn-primary px-3 py-2 text-sm" onClick={save} disabled={saving || !dirty || sameHour}>
+          <Save size={14} /> Save
+        </button>
+        <button
+          className={`btn-ghost px-3 py-2 text-sm ${branch.active ? "text-red-500" : "text-leaf"}`}
+          onClick={toggleActive}
+        >
+          <Power size={14} /> {branch.active ? "Deactivate" : "Activate"}
         </button>
       </div>
       <p className="text-xs mt-2 opacity-70">
-        Current: <b>{hourLabel(openHour)}</b> → <b>{hourLabel(closeHour)}</b>
+        {hourLabel(openHour)} → {hourLabel(closeHour)}
         {nextDay ? " (closes next day)" : " (same day)"}
         {sameHour && <span className="text-red-500 font-semibold"> — choose different hours</span>}
       </p>
@@ -256,11 +327,13 @@ function StaffModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { data: branchData } = useFetch<{ branches: BranchRow[] }>("/api/branches");
+  const branches = branchData?.branches ?? [];
   const [fullName, setFullName] = useState(member?.fullName ?? "");
   const [username, setUsername] = useState(member?.username ?? "");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<StaffMember["role"]>(member?.role ?? "cashier");
-  const [branch, setBranch] = useState<string>(member?.branch ?? "suli");
+  const [branchId, setBranchId] = useState<string>(member?.branchId ?? "");
   const [salary, setSalary] = useState(member?.salary?.toString() ?? "");
   const [saving, setSaving] = useState(false);
   const toast = useToast();
@@ -272,7 +345,7 @@ function StaffModal({
         await apiSend(`/api/staff/${member.id}`, "PATCH", {
           fullName,
           role,
-          ...(role !== "admin" ? { branch } : {}),
+          ...(role !== "admin" ? { branchId } : {}),
           ...(isAdmin ? { salary } : {}),
         });
       } else {
@@ -281,7 +354,7 @@ function StaffModal({
           password,
           fullName,
           role,
-          ...(role !== "admin" ? { branch } : {}),
+          ...(role !== "admin" ? { branchId } : {}),
           ...(isAdmin ? { salary } : {}),
         });
       }
@@ -333,16 +406,19 @@ function StaffModal({
             ))}
           </select>
           {role === "admin" && (
-            <p className="text-xs opacity-50 mt-1">Admins are super admins — they see and switch between both branches.</p>
+            <p className="text-xs opacity-50 mt-1">Admins are super admins — they see and switch between every branch.</p>
           )}
         </div>
         {role !== "admin" && (
           <div>
             <label className="label">Branch</label>
-            <select className="input" value={branch} onChange={(e) => setBranch(e.target.value)}>
-              {BRANCHES.map((b) => (
-                <option key={b} value={b}>
-                  {BRANCH_LABELS[b]}
+            <select className="input" value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+              <option value="" disabled>
+                Select a branch
+              </option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
                 </option>
               ))}
             </select>
