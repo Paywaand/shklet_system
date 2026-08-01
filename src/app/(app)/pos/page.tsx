@@ -30,6 +30,8 @@ import { Loading, ErrorState, EmptyState, Modal } from "@/components/ui";
 import { Elapsed } from "@/components/Elapsed";
 import { useToast } from "@/components/Toast";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
+import { useSession } from "@/lib/session";
+import { Receipt, type ReceiptData } from "@/components/Receipt";
 
 type CartLine = {
   key: string; // unique per item + chosen modifier
@@ -90,6 +92,12 @@ export default function CashierPage() {
   const visibleCategories = (
     activeCat === ALL ? categories : categories.filter((c) => c.id === activeCat)
   ).filter((c) => c.items.length > 0);
+
+  const { user } = useSession();
+  // Set once an order is placed; drives the printable receipt overlay. Captured
+  // from the cart BEFORE clearCart() runs, since the cart is what holds the
+  // (already language-localised) line names.
+  const [receipt, setReceipt] = useState<ReceiptData | null>(null);
 
   const total = useMemo(() => cart.reduce((s, l) => s + l.price * l.quantity, 0), [cart]);
   const itemCount = cart.reduce((s, l) => s + l.quantity, 0);
@@ -154,6 +162,26 @@ export default function CashierPage() {
             ? t("cashier.toast.savedOffline", { n: pager as number })
             : t("cashier.toast.orderPlaced", { n: pager as number })
         );
+        // Capture the receipt while the cart is still populated. A queued
+        // offline order has no server code yet, so the receipt falls back to
+        // the pager number alone.
+        setReceipt({
+          shortId: res.order?.shortId ?? null,
+          pagerNumber: pager as number,
+          placedAt: res.order?.placedAt ?? new Date(),
+          orderType: orderType === "takeaway" ? "takeaway" : "walk_in",
+          paymentMethod: payment,
+          isPaid,
+          total,
+          cashierName: user.fullName,
+          lines: cart.map((l) => ({
+            key: l.key,
+            name: l.name,
+            price: l.price,
+            quantity: l.quantity,
+            modifier: l.modifier,
+          })),
+        });
       } else {
         // Delivery is out of scope for offline mode — online only.
         await apiSend<{ order: DeliveryOrder }>("/api/delivery-orders", "POST", {
@@ -408,6 +436,9 @@ export default function CashierPage() {
           }}
         />
       )}
+
+      {/* Printable receipt for the order just placed. */}
+      {receipt && <Receipt data={receipt} onClose={() => setReceipt(null)} />}
     </>
   );
 }

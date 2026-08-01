@@ -175,6 +175,44 @@
   margin-top: 5px;
 }
 
+/* Kurdish (Sorani) receipt. The Latin monospace stack above cannot shape
+   Arabic script — glyphs render unjoined or as boxes — so the RTL variant
+   switches to a system Arabic-script face and drops the monospace metrics.
+   Slightly larger, because Arabic script needs more vertical room than Latin
+   at the same nominal size to stay legible on thermal paper. */
+.receipt-rtl {
+  direction: rtl;
+  text-align: right;
+  font-family: "Noto Naskh Arabic", "Segoe UI", "Tahoma", "Arial", sans-serif;
+  line-height: 1.45;
+}
+.receipt-rtl .r-brand,
+.receipt-rtl .r-sub,
+.receipt-rtl .r-thanks,
+.receipt-rtl .r-big {
+  text-align: center;
+}
+.receipt-rtl .r-items li {
+  font-size: 16px;
+}
+.receipt-rtl .r-mod {
+  padding-left: 0;
+  padding-right: 16px;
+}
+/* The pager number stays LTR: digits read left-to-right even in RTL text, and
+   this element is a bare number with no surrounding words. */
+.receipt-rtl .r-big-label {
+  direction: ltr;
+}
+
+/* Print controls — on screen only, never on the paper. */
+.receipt-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 12px;
+}
+
 /* On-screen receipt overlay (rendered in a body-level portal). */
 .receipt-print-root {
   position: fixed;

@@ -17,6 +17,7 @@ export const ku: Dict = {
     optional: "ئارەزوومەندانە",
     all: "هەموو",
     loading: "بارکردن…",
+    close: "داخستن",
     cash: "کاش",
     card: "کارت",
     pos: "پی‌ئۆس",
@@ -386,6 +387,31 @@ export const ku: Dict = {
     },
   },
 
+  // Thermal receipt printed at the till. Three strings differ deliberately from
+  // the first translation pass: "کۆپی کڕیار" (not "وشەی کڕیار", which means
+  // "customer's word"), and Total stays "کۆی گشتی" to match cashier.cart and
+  // sales.table — the same phrase must not mean Subtotal here and Total there.
+  receipt: {
+    order: "داواکاری",
+    pager: "پەیجەر",
+    date: "بەروار",
+    time: "کات",
+    cashier: "کاسێر",
+    items: "بابەتەکان",
+    qty: "دانە",
+    total: "کۆی گشتی",
+    paymentMethod: "شێوازی پارەدان",
+    paid: "دراوە",
+    notPaid: "نەدراوە",
+    orderType: "جۆری داواکاری",
+    dineIn: "ناوەوە",
+    currency: "دینار",
+    customerCopy: "کۆپی کڕیار",
+    thanks: "سوپاس بۆ کڕینتان!",
+    seeYou: "چاومان پێتان دەکەوێتەوە",
+    print: "چاپکردنی وەسڵ",
+    offlineNoCode: "ئۆفلاین — کۆدی داواکاری لە کاتی هاوکاتکردن دیاری دەکرێت",
+  },
   cashier: {
     header: {
       title: "کاشێر",

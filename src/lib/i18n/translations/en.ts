@@ -17,6 +17,7 @@ export const en: Dict = {
     optional: "Optional",
     all: "All",
     loading: "Loading…",
+    close: "Close",
     cash: "Cash",
     card: "Card",
     pos: "POS",
@@ -389,6 +390,29 @@ export const en: Dict = {
     },
   },
 
+  // Thermal receipt printed at the till. Kept deliberately terse — every string
+  // has to fit an 80mm roll (~32 characters at the receipt's body font size).
+  receipt: {
+    order: "Order",
+    pager: "Pager",
+    date: "Date",
+    time: "Time",
+    cashier: "Cashier",
+    items: "Items",
+    qty: "Qty",
+    total: "Total",
+    paymentMethod: "Payment",
+    paid: "PAID",
+    notPaid: "NOT PAID",
+    orderType: "Type",
+    dineIn: "Dine in",
+    currency: "IQD",
+    customerCopy: "Customer copy",
+    thanks: "Thank you!",
+    seeYou: "See you again",
+    print: "Print receipt",
+    offlineNoCode: "Offline — order code assigned on sync",
+  },
   cashier: {
     header: {
       title: "Cashier",

@@ -76,7 +76,12 @@ function createOpToOrder(op: Extract<OutboxOp, { kind: "create" }>): Order {
   };
 }
 
-export type PlaceResult = { ok: true; queued: boolean } | { ok: false; error: string };
+// `order` is present only when the create round-tripped to the server (i.e.
+// !queued). A queued offline order has no server-assigned code yet, so a
+// receipt printed for it shows the pager number and omits the order code.
+export type PlaceResult =
+  | { ok: true; queued: boolean; order?: Order }
+  | { ok: false; error: string };
 
 // branchId: "" = main branch, otherwise an event id. Determines which
 // branch/event's active-orders queue is fetched and cached. (Physical-branch
@@ -196,7 +201,7 @@ export function usePosOffline(branchId: string = "") {
         const res = await sendJson<{ order: Order }>("/api/orders", "POST", { clientId, ...payload });
         if (res.ok) {
           await loadActive();
-          return { ok: true, queued: false };
+          return { ok: true, queued: false, order: res.data?.order };
         }
         if (res.kind === "http") return { ok: false, error: res.error };
         // network error → fall through and queue
