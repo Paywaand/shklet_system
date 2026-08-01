@@ -21,6 +21,8 @@ export const en: Dict = {
     card: "Card",
     pos: "POS",
     mainBranch: "Main branch (no event)",
+    previous: "Previous",
+    next: "Next",
   },
 
   nav: {
@@ -107,6 +109,18 @@ export const en: Dict = {
       lastMonth: "Last month",
       allBranches: "All Branches",
       mainBranch: "Main branch",
+      allPhysicalBranches: "All branches",
+      from: "From date",
+      to: "To date",
+      pickRange: "Pick a start and end date to load this range",
+    },
+    export: {
+      title: "Monthly report (CSV)",
+      hint: "Transaction-level sales, expenses and delivery for bookkeeping.",
+      month: "Month",
+      sales: "Sales CSV",
+      expenses: "Expenses CSV",
+      delivery: "Delivery CSV",
     },
     expectedCash: {
       title: "Expected Cash on Hand",
@@ -134,6 +148,7 @@ export const en: Dict = {
       allTypes: "All types",
       allPaidStatus: "All payment status",
       csv: "CSV",
+      showing: "Showing {from}–{to} of {total} orders",
       noOrders: "No orders in this range",
     },
     table: {

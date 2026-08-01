@@ -158,6 +158,11 @@ model Order {
   @@index([eventId])
   @@index([branch])
   @@index([branchId])
+  // Reporting reads always filter city + date range together (Sales overview,
+  // monthly CSV, profit). Without these composites Postgres bitmap-ands two
+  // single-column indexes, or falls back to a seq scan on wide ranges.
+  @@index([branch, placedAt])
+  @@index([branchId, placedAt])
 }
 
 model OrderItem {
@@ -259,6 +264,8 @@ model Expense {
   @@index([date])
   @@index([eventId])
   @@index([branch])
+  // Monthly CSV export + expenses page both filter branch + date range.
+  @@index([branch, date])
 }
 
 // ----------------------- Cash tracking (admin-only, per-branch) -----------------------

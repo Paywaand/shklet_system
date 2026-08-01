@@ -1,12 +1,26 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { authorize } from "@/lib/guard";
 import { activeBranch, activeBranchId } from "@/lib/branchScope";
-import { countsTowardPrepAvg } from "@/lib/prepTime";
-import { localHour, businessDayKey } from "@/lib/format";
+import { MIN_PREP_SECONDS, MAX_PREP_SECONDS } from "@/lib/prepTime";
+import { SYSTEM_TIME_ZONE } from "@/lib/format";
 import { getBusinessHours } from "@/lib/businessHours";
+import { businessDayExpr, localHourExpr, dateKey } from "@/lib/reportingSql";
+import { orderScopeSql } from "@/lib/orderScope";
 
 // GET /api/analytics?from=ISO&to=ISO
+//
+// Returns AGGREGATES ONLY. Every figure is rolled up by Postgres, so the
+// response is a few hundred rows regardless of range size — a full year returns
+// ~365 day-rows instead of the ~45k hydrated orders (plus every line item) this
+// route used to serialise. The order history table is served separately and
+// paginated by /api/analytics/orders.
+//
+// `from`/`to` are required. An unbounded reporting query scans the whole orders
+// table and pins a pooled connection for its duration, which starves the small
+// Prisma pool that POS order writes also draw from — that is the real cost of
+// the old "no dates = everything" behaviour, not just a slow chart.
 export async function GET(req: Request) {
   const guard = await authorize("analytics.view");
   if (!guard.ok) return guard.response;
@@ -16,107 +30,143 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const from = url.searchParams.get("from");
   const to = url.searchParams.get("to");
-  const eventId = url.searchParams.get("eventId");
-  // Optional branch selector — "all" (default) spans every branch in the
-  // current city; a specific branch id scopes to just that branch.
-  const branchIdParam = url.searchParams.get("branchId");
-
-  const where: {
-    branch: string;
-    branchId?: string;
-    placedAt?: { gte?: Date; lte?: Date };
-    eventId?: string | null;
-  } = { branch };
-  if (branchIdParam && branchIdParam !== "all") where.branchId = branchIdParam;
-  if (from || to) {
-    where.placedAt = {};
-    if (from) where.placedAt.gte = new Date(from);
-    if (to) where.placedAt.lte = new Date(to);
+  if (!from || !to) {
+    return NextResponse.json({ error: "from and to are required" }, { status: 400 });
   }
-  if (eventId && eventId !== "all") {
-    where.eventId = eventId === "main" ? null : eventId;
+  const gte = new Date(from);
+  const lte = new Date(to);
+  if (isNaN(gte.getTime()) || isNaN(lte.getTime())) {
+    return NextResponse.json({ error: "Invalid date range" }, { status: 400 });
+  }
+  if (gte > lte) {
+    return NextResponse.json({ error: "from must be before to" }, { status: 400 });
   }
 
-  // Fetch every order placed in range, cancelled included — the Sales page's
-  // order history is a placement log, so a cancelled order should still show
-  // up there (marked "cancelled"), it just never counts toward revenue/stats.
-  const [orders, businessHours] = await Promise.all([
-    prisma.order.findMany({
-      where,
-      orderBy: { placedAt: "desc" },
-      include: { items: true, staff: { select: { fullName: true } } },
-    }),
-    getBusinessHours(branchId),
+  const businessHours = await getBusinessHours(branchId);
+
+  const where = orderScopeSql({
+    branch,
+    branchId: url.searchParams.get("branchId"),
+    eventId: url.searchParams.get("eventId"),
+    gte,
+    lte,
+    excludeCancelled: true,
+  });
+
+  const bday = businessDayExpr(Prisma.sql`o."placedAt"`, businessHours, SYSTEM_TIME_ZONE);
+  const hour = localHourExpr(Prisma.sql`o."placedAt"`, SYSTEM_TIME_ZONE);
+
+  // One scan, four rollups. GROUPING SETS yields revenue-by-business-day,
+  // orders-by-hour, the payment split and the grand total from a single pass;
+  // the GROUPING() flags say which rollup each row belongs to.
+  type RollupRow = {
+    g_bday: number;
+    g_hr: number;
+    g_pm: number;
+    bday: Date | null;
+    hr: number | null;
+    pm: string | null;
+    cnt: bigint;
+    revenue: bigint;
+  };
+
+  const [rollup, timing, slowest, topItems] = await Promise.all([
+    prisma.$queryRaw<RollupRow[]>`
+      WITH src AS (
+        SELECT ${bday} AS bday, ${hour} AS hr, o."paymentMethod" AS pm, o."total" AS total
+        FROM "Order" o
+        WHERE ${where}
+      )
+      SELECT
+        GROUPING(bday) AS g_bday,
+        GROUPING(hr)   AS g_hr,
+        GROUPING(pm)   AS g_pm,
+        bday, hr, pm,
+        COUNT(*)::bigint                AS cnt,
+        COALESCE(SUM(total), 0)::bigint AS revenue
+      FROM src
+      GROUP BY GROUPING SETS ((bday), (hr), (pm), ())
+    `,
+    // Average prep time excludes "instant" items and runaway outliers — see
+    // lib/prepTime.ts for why.
+    prisma.$queryRaw<{ avg_dur: number | null }[]>`
+      SELECT AVG(o."durationSeconds") FILTER (
+               WHERE o."durationSeconds" BETWEEN ${MIN_PREP_SECONDS} AND ${MAX_PREP_SECONDS}
+             )::float8 AS avg_dur
+      FROM "Order" o
+      WHERE ${where}
+    `,
+    // Slowest order is taken from ALL completed orders, unbounded — an instant
+    // item is never the slowest anyway.
+    prisma.$queryRaw<{ pagerNumber: number; durationSeconds: number }[]>`
+      SELECT o."pagerNumber", o."durationSeconds"
+      FROM "Order" o
+      WHERE ${where} AND o."durationSeconds" IS NOT NULL
+      ORDER BY o."durationSeconds" DESC
+      LIMIT 1
+    `,
+    prisma.$queryRaw<{ name: string; qty: bigint; revenue: bigint }[]>`
+      SELECT i."name",
+             SUM(i."quantity")::bigint             AS qty,
+             SUM(i."price" * i."quantity")::bigint AS revenue
+      FROM "OrderItem" i
+      JOIN "Order" o ON o."id" = i."orderId"
+      WHERE ${where}
+      GROUP BY i."name"
+      ORDER BY qty DESC
+      LIMIT 10
+    `,
   ]);
 
-  // Cancelled orders never took money and must not count as sales.
-  const soldOrders = orders.filter((o) => o.status !== "cancelled");
-
-  const totalOrders = soldOrders.length;
-  const totalRevenue = soldOrders.reduce((s, o) => s + o.total, 0);
-  const avgOrderValue = totalOrders ? Math.round(totalRevenue / totalOrders) : 0;
-
-  // Orders by hour (0–23)
-  const byHour = Array.from({ length: 24 }, (_, h) => ({ hour: h, count: 0 }));
-  for (const o of soldOrders) byHour[localHour(o.placedAt)].count++;
-  const busiest = byHour.reduce((a, b) => (b.count > a.count ? b : a), byHour[0]);
-  const busiestHour = busiest.count > 0 ? busiest.hour : null;
-
-  // Timing. The average excludes "instant" items (durationSeconds < 30, e.g.
-  // water) so they don't skew it; the slowest order is still taken from all
-  // completed orders (an instant item is never the slowest anyway).
-  const withDuration = soldOrders.filter((o) => o.durationSeconds != null);
-  const forAvg = soldOrders.filter((o) => countsTowardPrepAvg(o.durationSeconds));
-  const avgDurationSeconds = forAvg.length
-    ? Math.round(forAvg.reduce((s, o) => s + (o.durationSeconds || 0), 0) / forAvg.length)
-    : null;
-  const slowest = withDuration.reduce<typeof withDuration[number] | null>(
-    (a, o) => (!a || (o.durationSeconds || 0) > (a.durationSeconds || 0) ? o : a),
-    null
-  );
-
-  // Revenue by business day (a trading night buckets under one day, not split at
-  // calendar midnight).
-  const dayMap = new Map<string, number>();
-  for (const o of soldOrders) {
-    const key = businessDayKey(o.placedAt, businessHours);
-    dayMap.set(key, (dayMap.get(key) || 0) + o.total);
-  }
-  const revenueByDay = [...dayMap.entries()]
-    .map(([date, revenue]) => ({ date, revenue }))
+  // Unpack the grouping sets: a GROUPING() flag of 1 means that column was
+  // rolled up, so the rows belonging to a set are the ones with their own flag
+  // at 0, and the grand total is the row where every flag is 1.
+  const revenueByDay = rollup
+    .filter((r) => r.g_bday === 0 && r.bday != null)
+    .map((r) => ({ date: dateKey(r.bday as Date), revenue: Number(r.revenue) }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  // Top items
-  const itemMap = new Map<string, { name: string; qty: number; revenue: number }>();
-  for (const o of soldOrders) {
-    for (const it of o.items) {
-      const cur = itemMap.get(it.name) || { name: it.name, qty: 0, revenue: 0 };
-      cur.qty += it.quantity;
-      cur.revenue += it.price * it.quantity;
-      itemMap.set(it.name, cur);
+  const hourCounts = new Map<number, number>();
+  for (const r of rollup) {
+    if (r.g_hr === 0 && r.hr != null) hourCounts.set(r.hr, Number(r.cnt));
+  }
+  const ordersByHour = Array.from({ length: 24 }, (_, h) => ({
+    hour: h,
+    count: hourCounts.get(h) ?? 0,
+  }));
+  const busiest = ordersByHour.reduce((a, b) => (b.count > a.count ? b : a), ordersByHour[0]);
+  const busiestHour = busiest.count > 0 ? busiest.hour : null;
+
+  const paymentSplit = { cash: 0, card: 0, pos: 0 };
+  for (const r of rollup) {
+    if (r.g_pm === 0 && r.pm && r.pm in paymentSplit) {
+      paymentSplit[r.pm as keyof typeof paymentSplit] = Number(r.cnt);
     }
   }
-  const topItems = [...itemMap.values()].sort((a, b) => b.qty - a.qty).slice(0, 10);
 
-  // Payment split
-  const paymentSplit = {
-    cash: soldOrders.filter((o) => o.paymentMethod === "cash").length,
-    card: soldOrders.filter((o) => o.paymentMethod === "card").length,
-    pos: soldOrders.filter((o) => o.paymentMethod === "pos").length,
-  };
+  const grand = rollup.find((r) => r.g_bday === 1 && r.g_hr === 1 && r.g_pm === 1);
+  const totalOrders = grand ? Number(grand.cnt) : 0;
+  const totalRevenue = grand ? Number(grand.revenue) : 0;
+  const avgOrderValue = totalOrders ? Math.round(totalRevenue / totalOrders) : 0;
+
+  const avgDuration = timing[0]?.avg_dur;
+  const avgDurationSeconds = avgDuration != null ? Math.round(avgDuration) : null;
 
   return NextResponse.json({
     summary: { totalOrders, totalRevenue, avgOrderValue, busiestHour },
     timing: {
       avgDurationSeconds,
-      slowest: slowest
-        ? { pagerNumber: slowest.pagerNumber, durationSeconds: slowest.durationSeconds }
+      slowest: slowest[0]
+        ? { pagerNumber: slowest[0].pagerNumber, durationSeconds: slowest[0].durationSeconds }
         : null,
     },
     revenueByDay,
-    topItems,
-    ordersByHour: byHour,
+    topItems: topItems.map((i) => ({
+      name: i.name,
+      qty: Number(i.qty),
+      revenue: Number(i.revenue),
+    })),
+    ordersByHour,
     paymentSplit,
-    orders,
   });
 }

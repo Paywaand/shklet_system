@@ -21,6 +21,8 @@ export const ku: Dict = {
     card: "کارت",
     pos: "پی‌ئۆس",
     mainBranch: "لقی سەرەکی (بێ بۆنە)",
+    previous: "پێشوو",
+    next: "دواتر",
   },
 
   nav: {
@@ -107,6 +109,18 @@ export const ku: Dict = {
       lastMonth: "مانگی ڕابردوو",
       allBranches: "هەموو لقەکان",
       mainBranch: "لقی سەرەکی",
+      allPhysicalBranches: "هەموو لقەکان",
+      from: "لە ڕێکەوتی",
+      to: "بۆ ڕێکەوتی",
+      pickRange: "ڕێکەوتی دەستپێک و کۆتایی دیاری بکە بۆ بارکردنی ئەم مەودایە",
+    },
+    export: {
+      title: "ڕاپۆرتی مانگانە (CSV)",
+      hint: "فرۆشتن، خەرجی و گەیاندن بە وردەکاری بۆ ژمێریاری.",
+      month: "مانگ",
+      sales: "CSV ی فرۆشتن",
+      expenses: "CSV ی خەرجی",
+      delivery: "CSV ی گەیاندن",
     },
     expectedCash: {
       title: "کاشی پێشبینیکراو لەبەردەستدا",
@@ -134,6 +148,7 @@ export const ku: Dict = {
       allTypes: "هەموو جۆرەکان",
       allPaidStatus: "هەموو دۆخی پارەدانەکان",
       csv: "CSV",
+      showing: "پیشاندانی {from}–{to} لە کۆی {total} داواکاری",
       noOrders: "هیچ داواکارییەک لەم مەودایەدا نییە",
     },
     table: {
