@@ -20,6 +20,7 @@ import {
   Users,
   ShieldCheck,
   Wallet,
+  LayoutDashboard,
   LogOut,
   Menu as MenuIcon,
   X,
@@ -115,6 +116,12 @@ export function Sidebar({
   // items are dropped entirely.
   const groups: NavGroup[] = (
     [
+      {
+        title: t("nav.groupOverview"),
+        items: [
+          { href: "/dashboard", label: t("nav.dashboard"), icon: <LayoutDashboard size={20} />, adminOnly: true },
+        ],
+      },
       {
         title: t("nav.groupOperations"),
         items: [

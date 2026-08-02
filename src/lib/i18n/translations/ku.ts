@@ -27,6 +27,8 @@ export const ku: Dict = {
   },
 
   nav: {
+    groupOverview: "گشتی",
+    dashboard: "داشبۆرد",
     groupOperations: "کارەکان",
     groupInventoryProduction: "کۆگا و بەرهەمهێنان",
     groupFinance: "دارایی",
@@ -39,6 +41,22 @@ export const ku: Dict = {
     signOut: "چوونەدەرەوە",
     lightMode: "دۆخی ڕووناک",
     darkMode: "دۆخی تاریک",
+  },
+
+  dashboard: {
+    title: "داشبۆرد",
+    subtitle: "کورتەیەک — ئەمڕۆ، ئەم مانگە، و چی پێویستی سەرنجدانە",
+    adminOnly: "ئەم پەڕەیە تەنها بۆ ئەدمینەکانە",
+    todayOrders: "داواکارییەکانی ئەمڕۆ",
+    todayRevenue: "داهاتی ئەمڕۆ",
+    monthProfit: "قازانجی ئەم مانگە",
+    cashOnHand: "کاشی لەبەردەستدا",
+    unpaidToday: "داواکارییە نەدراوەکانی ئەمڕۆ",
+    unpaidCount: "{n} داواکاری هێشتا پارەیان نەدراوە",
+    lowStock: "کەمی کاڵا",
+    andMore: "و {n} زیاتر",
+    viewSales: "بینینی فرۆشتن",
+    viewInventory: "بینینی کۆگا",
   },
 
   expenses: {

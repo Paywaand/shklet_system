@@ -27,6 +27,8 @@ export const en: Dict = {
   },
 
   nav: {
+    groupOverview: "Overview",
+    dashboard: "Dashboard",
     groupOperations: "Operations",
     groupInventoryProduction: "Inventory & Production",
     groupFinance: "Finance",
@@ -39,6 +41,22 @@ export const en: Dict = {
     signOut: "Sign out",
     lightMode: "Light mode",
     darkMode: "Dark mode",
+  },
+
+  dashboard: {
+    title: "Dashboard",
+    subtitle: "At a glance — today, this month, and what needs attention",
+    adminOnly: "This page is only available to admins",
+    todayOrders: "Today's orders",
+    todayRevenue: "Today's revenue",
+    monthProfit: "Profit this month",
+    cashOnHand: "Cash on hand",
+    unpaidToday: "Unpaid orders today",
+    unpaidCount: "{n} order(s) not marked as paid",
+    lowStock: "Low stock",
+    andMore: "and {n} more",
+    viewSales: "View Sales",
+    viewInventory: "View Inventory",
   },
 
   expenses: {
