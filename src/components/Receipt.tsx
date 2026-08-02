@@ -5,14 +5,19 @@ import { useEffect, useState } from "react";
 import { num, shortDate, shortTime } from "@/lib/format";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 
-// An 80mm thermal receipt, rendered into a body-level portal so the print
-// stylesheet in globals.css can collapse everything except this element and
-// emit one continuous strip (see the `@media print` block there).
+// A kitchen ticket, not a customer receipt: it prints at the till and goes to
+// whoever is making the order, not home with the customer. Every field on it
+// is something the kitchen needs to act correctly — pager, order time, exactly
+// what to make (including sauces/specialty), whether it's paid, how, and
+// whether it's dine-in or takeaway. Nothing else belongs on it, so there is no
+// order code, cashier name, or "thank you" footer.
 //
-// Language follows the app's current selection. In Kurdish the whole receipt
-// flips to RTL and uses a system Arabic-script font — the Latin monospace stack
-// the receipt normally uses cannot shape Arabic script at all, so this is not
-// merely a cosmetic direction change.
+// Rendered into a body-level portal so the print stylesheet in globals.css can
+// collapse everything except this element and emit one continuous 80mm strip.
+//
+// Language follows the app's current selection. Kurdish flips to RTL with an
+// Arabic-script font — the Latin monospace stack cannot shape Arabic script at
+// all, so this is a correctness fix, not styling.
 
 export type ReceiptLine = {
   key: string;
@@ -25,15 +30,12 @@ export type ReceiptLine = {
 };
 
 export type ReceiptData = {
-  // Absent for an order placed offline — the server assigns the code on sync.
-  shortId?: string | null;
   pagerNumber: number | null;
   placedAt: string | Date;
   orderType: "walk_in" | "takeaway" | "delivery";
   paymentMethod: string;
   isPaid: boolean;
   total: number;
-  cashierName?: string | null;
   lines: ReceiptLine[];
 };
 
@@ -58,13 +60,12 @@ export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => v
   const isKu = lang === "ku";
   const money = (amount: number) => `${num(amount)} ${t("receipt.currency")}`;
 
-  // In RTL, a Latin/digit run like "26-7W5JD" or "2 Aug 2026" gets reordered by
-  // the bidi algorithm and prints as "7W5JD-26" / "Aug 2026 2". Wrapping each
-  // such value in <bdi> isolates it so it keeps its own direction — an order
-  // code printed backwards is worse than useless at the counter.
+  // In RTL, a Latin/digit run like "3,500 IQD" or "2 Aug 2026" gets reordered
+  // by the bidi algorithm — wrapping each such value in <bdi> isolates it so it
+  // keeps its own direction.
   const placed = typeof data.placedAt === "string" ? new Date(data.placedAt) : data.placedAt;
   // Kurdish uses a numeric date: the month names available from toLocaleDateString
-  // are English, which reads oddly on an otherwise fully Kurdish receipt.
+  // are English, which reads oddly on an otherwise fully Kurdish ticket.
   const dateText = isKu
     ? placed.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })
     : shortDate(placed);
@@ -84,12 +85,9 @@ export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => v
       <div className="receipt-dialog" onClick={(e) => e.stopPropagation()}>
         <div className={`receipt${isKu ? " receipt-rtl" : ""}`} dir={isKu ? "rtl" : "ltr"}>
           <p className="r-brand">Shklet</p>
-          <p className="r-sub">{t("receipt.customerCopy")}</p>
 
-          <hr className="r-rule" />
-
-          {/* The pager number is what the customer is actually called by, so it
-              is the one thing on the receipt readable across a busy counter. */}
+          {/* The pager is what the kitchen calls the order by, so it is the
+              single largest thing on the ticket. */}
           {data.pagerNumber != null && (
             <div className="r-big">
               <div className="r-big-label">{data.pagerNumber}</div>
@@ -97,28 +95,15 @@ export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => v
             </div>
           )}
 
-          <div className="r-meta">
-            {data.shortId ? (
-              <div>
-                {t("receipt.order")}: <bdi>{data.shortId}</bdi>
-              </div>
-            ) : (
-              <div>{t("receipt.offlineNoCode")}</div>
-            )}
-            <div>
-              {t("receipt.date")}: <bdi>{dateText}</bdi>
-            </div>
-            <div>
-              {t("receipt.time")}: <bdi>{shortTime(placed)}</bdi>
-            </div>
-            <div>
-              {t("receipt.orderType")}: {typeLabel}
-            </div>
-            {data.cashierName && (
-              <div>
-                {t("receipt.cashier")}: {data.cashierName}
-              </div>
-            )}
+          <hr className="r-rule" />
+
+          <div className="r-flags">
+            <span className="r-flag">{typeLabel}</span>
+            <span className="r-flag">
+              <bdi>
+                {dateText} {shortTime(placed)}
+              </bdi>
+            </span>
           </div>
 
           <hr className="r-rule" />
@@ -126,7 +111,7 @@ export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => v
           <ul className="r-items">
             {data.lines.map((l) => (
               <li key={l.key}>
-                {l.quantity} × <bdi>{l.name}</bdi> — <bdi>{money(l.price * l.quantity)}</bdi>
+                {l.quantity} × <bdi>{l.name}</bdi>
                 {l.modifier && (
                   <span className="r-mod">
                     <bdi>{l.modifier}</bdi>
@@ -142,14 +127,11 @@ export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => v
             {t("receipt.total")}: <bdi>{money(data.total)}</bdi>
           </div>
           <div className="r-paid">
-            {t("receipt.paymentMethod")}: {paymentLabel} —{" "}
-            {data.isPaid ? t("receipt.paid") : t("receipt.notPaid")}
+            {paymentLabel} —{" "}
+            <span className={data.isPaid ? "r-paid-yes" : "r-paid-no"}>
+              {data.isPaid ? t("receipt.paid") : t("receipt.notPaid")}
+            </span>
           </div>
-
-          <hr className="r-rule" />
-
-          <p className="r-thanks">{t("receipt.thanks")}</p>
-          <p className="r-sub">{t("receipt.seeYou")}</p>
         </div>
 
         {/* Controls are excluded from the printed output by globals.css. */}

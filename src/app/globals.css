@@ -89,16 +89,18 @@
   border-radius: 999px;
 }
 
-/* ---------------- Thermal receipt (80mm) ----------------
-   Used both on screen (preview) and when printing. Optimised for thermal
-   printers: black-on-white, bold, condensed, minimal wasted space. */
+/* ---------------- Kitchen ticket (80mm) ----------------
+   This prints for the kitchen, not the customer — it goes to whoever makes
+   the order, so it is deliberately bold and high-contrast throughout rather
+   than using a lighter weight anywhere for visual hierarchy. Every rule here
+   is heavy enough to stay legible on a worn thermal head. */
 .receipt {
   width: 80mm;
   margin: 0 auto;
   background: #fff;
   color: #000;
   font-family: "Courier New", "Courier", monospace;
-  line-height: 1.2;
+  line-height: 1.25;
   padding: 4mm 4mm 5mm;
 }
 .receipt * {
@@ -107,41 +109,43 @@
 .receipt .r-brand {
   text-align: center;
   font-weight: 800;
-  font-size: 26px;
+  font-size: 22px;
   letter-spacing: 1px;
-  margin: 0;
-}
-.receipt .r-sub {
-  text-align: center;
-  font-weight: 700;
-  font-size: 13px;
+  margin: 0 0 2px;
 }
 .receipt .r-rule {
   border: 0;
-  border-top: 2px dashed #000;
-  margin: 5px 0;
-}
-.receipt .r-meta div {
-  font-weight: 700;
-  font-size: 15px;
-  margin: 1px 0;
+  border-top: 3px dashed #000;
+  margin: 6px 0;
 }
 .receipt .r-big {
   text-align: center;
-  margin: 4px 0;
+  margin: 2px 0;
 }
 .receipt .r-big-label {
   font-weight: 800;
-  font-size: 38px;
+  font-size: 44px;
   line-height: 1.05;
-  border-top: 3px solid #000;
-  border-bottom: 3px solid #000;
-  padding: 5px 0;
+  border-top: 4px solid #000;
+  border-bottom: 4px solid #000;
+  padding: 6px 0;
 }
 .receipt .r-ref {
-  font-weight: 700;
-  font-size: 15px;
+  font-weight: 800;
+  font-size: 16px;
   margin-top: 3px;
+}
+/* Order type + placed time — the two facts a busy kitchen needs at a glance
+   without reading the item list. */
+.receipt .r-flags {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.receipt .r-flag {
+  font-weight: 800;
+  font-size: 16px;
+  text-transform: uppercase;
 }
 .receipt .r-items {
   list-style: none;
@@ -149,33 +153,42 @@
   padding: 0;
 }
 .receipt .r-items li {
-  font-weight: 700;
-  font-size: 15px;
-  margin: 2px 0;
+  font-weight: 800;
+  font-size: 20px;
+  margin: 4px 0;
 }
+/* Sauces/specialty — must read as clearly as the item itself, so it is bold
+   like everything else here, not a lighter secondary line. */
 .receipt .r-mod {
   display: block;
-  font-weight: 400;
-  font-size: 13px;
+  font-weight: 800;
+  font-size: 17px;
   padding-left: 16px;
 }
 .receipt .r-total {
   font-weight: 800;
-  font-size: 19px;
-  margin-top: 2px;
+  font-size: 26px;
+  margin-top: 4px;
 }
 .receipt .r-paid {
-  font-weight: 700;
-  font-size: 15px;
+  font-weight: 800;
+  font-size: 18px;
 }
-.receipt .r-thanks {
-  text-align: center;
-  font-weight: 700;
-  font-size: 16px;
-  margin-top: 5px;
+.receipt .r-paid-yes,
+.receipt .r-paid-no {
+  font-weight: 800;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border: 2px solid #000;
+}
+/* NOT PAID gets a double border — this is the flag that most needs to stop a
+   kitchen or till worker mid-glance. */
+.receipt .r-paid-no {
+  border-width: 3px;
+  border-style: double;
 }
 
-/* Kurdish (Sorani) receipt. The Latin monospace stack above cannot shape
+/* Kurdish (Sorani) ticket. The Latin monospace stack above cannot shape
    Arabic script — glyphs render unjoined or as boxes — so the RTL variant
    switches to a system Arabic-script face and drops the monospace metrics.
    Slightly larger, because Arabic script needs more vertical room than Latin
@@ -184,16 +197,11 @@
   direction: rtl;
   text-align: right;
   font-family: "Noto Naskh Arabic", "Segoe UI", "Tahoma", "Arial", sans-serif;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 .receipt-rtl .r-brand,
-.receipt-rtl .r-sub,
-.receipt-rtl .r-thanks,
 .receipt-rtl .r-big {
   text-align: center;
-}
-.receipt-rtl .r-items li {
-  font-size: 16px;
 }
 .receipt-rtl .r-mod {
   padding-left: 0;
