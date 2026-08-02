@@ -92,7 +92,7 @@ function salesSection(r: MonthlyReport): string {
   ].join("");
   const payRows = tableRows([
     `<td>Cash</td><td class="r">${num(sales.payment.cash.count)}</td><td class="r">${iqd(sales.payment.cash.amount)}</td>`,
-    `<td>Card</td><td class="r">${num(sales.payment.card.count)}</td><td class="r">${iqd(sales.payment.card.amount)}</td>`,
+    `<td>FIB</td><td class="r">${num(sales.payment.card.count)}</td><td class="r">${iqd(sales.payment.card.amount)}</td>`,
     `<td>POS</td><td class="r">${num(sales.payment.pos.count)}</td><td class="r">${iqd(sales.payment.pos.amount)}</td>`,
   ]);
   return `${sectionTitle(1, "Sales Summary")}

@@ -87,7 +87,9 @@ export async function GET(req: Request) {
       shortTime(o.placedAt),
       businessDayKey(o.placedAt, businessHours),
       o.orderType === "takeaway" ? "Take Away" : "Walk-in",
-      o.paymentMethod,
+      // "card" is stored as-is in the database (unchanged, for historical
+      // consistency) but displays as "FIB" everywhere in the app.
+      o.paymentMethod === "card" ? "FIB" : o.paymentMethod === "cash" ? "Cash" : "POS",
       o.isPaid ? "Paid" : "Unpaid",
       o.status,
       o.total,

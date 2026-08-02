@@ -19,7 +19,7 @@ export const en: Dict = {
     loading: "Loading…",
     close: "Close",
     cash: "Cash",
-    card: "Card",
+    card: "FIB",
     pos: "POS",
     mainBranch: "Main branch (no event)",
     previous: "Previous",

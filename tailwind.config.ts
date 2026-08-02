@@ -53,6 +53,11 @@ const config: Config = {
         blush: {
           DEFAULT: "#F4A0B5", // mascot cheek pink (accents)
         },
+        // FIB (First Iraqi Bank) — the digital payment method formerly
+        // labelled "Card". Brand teal, not part of the Shklet palette above.
+        fib: {
+          DEFAULT: "#00A29A",
+        },
       },
       fontFamily: {
         sans: ["var(--font-sirwan)", "system-ui", "sans-serif"],

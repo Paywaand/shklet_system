@@ -19,7 +19,7 @@ export const ku: Dict = {
     loading: "بارکردن…",
     close: "داخستن",
     cash: "کاش",
-    card: "کارت",
+    card: "FIB",
     pos: "پی‌ئۆس",
     mainBranch: "لقی سەرەکی (بێ بۆنە)",
     previous: "پێشوو",

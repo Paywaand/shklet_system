@@ -85,6 +85,11 @@ function rangeToDates(key: RangeKey, customFrom: string, customTo: string, hours
 }
 
 const CHART_COLORS = ["#FEDB00", "#EF3340", "#232222", "#EF3340", "#CBA3D8"];
+// FIB (First Iraqi Bank) brand teal — kept as a literal hex here because
+// Recharts' `fill` prop takes a real color string, not a Tailwind class (the
+// `fib` Tailwind token in tailwind.config.ts is the same value, used wherever
+// a class works instead, e.g. the POS payment button).
+const FIB_COLOR = "#00A29A";
 
 // The order-history search hits the server now, so it has to settle before
 // firing rather than issuing a request per keystroke.
@@ -239,10 +244,13 @@ export default function AnalyticsPage() {
   if (!data) return null;
 
   const { summary, timing, revenueByDay, topItems, ordersByHour, paymentSplit } = data;
+  // Colors are assigned per payment method explicitly, not by position — with
+  // positional CHART_COLORS[i], the FIB slice's color depended on which OTHER
+  // segments happened to be zero (and get filtered out) that day.
   const pieData = [
-    { name: t("common.cash"), value: paymentSplit.cash },
-    { name: t("common.card"), value: paymentSplit.card },
-    { name: t("common.pos"), value: paymentSplit.pos },
+    { name: t("common.cash"), value: paymentSplit.cash, color: CHART_COLORS[0] },
+    { name: t("common.card"), value: paymentSplit.card, color: FIB_COLOR },
+    { name: t("common.pos"), value: paymentSplit.pos, color: CHART_COLORS[2] },
   ].filter((d) => d.value > 0);
 
   return (
@@ -339,8 +347,8 @@ export default function AnalyticsPage() {
             <ResponsiveContainer width="100%" height={240}>
               <PieChart>
                 <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} label>
-                  {pieData.map((_, i) => (
-                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                  {pieData.map((d) => (
+                    <Cell key={d.name} fill={d.color} />
                   ))}
                 </Pie>
                 <Tooltip />
@@ -433,11 +441,13 @@ export default function AnalyticsPage() {
                     </td>
                     <td className="py-2 pr-3 font-bold">{num(o.total)}</td>
                     <td className="py-2 pr-3 capitalize">
-                      {o.paymentMethod === "cash"
-                        ? t("common.cash")
-                        : o.paymentMethod === "card"
-                          ? t("common.card")
-                          : t("common.pos")}
+                      {o.paymentMethod === "card" ? (
+                        <span className="chip bg-fib/15 text-fib text-[10px]">{t("common.card")}</span>
+                      ) : o.paymentMethod === "cash" ? (
+                        t("common.cash")
+                      ) : (
+                        t("common.pos")
+                      )}
                     </td>
                     <td className="py-2 pr-3">
                       {o.isPaid ? (

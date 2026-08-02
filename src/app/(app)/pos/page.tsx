@@ -770,7 +770,7 @@ function CartPanel({
               </button>
               <button
                 onClick={() => setPayment("card")}
-                className={clsx("btn py-2.5", payment === "card" ? "bg-leaf text-white" : "bg-black/5 dark:bg-white/10")}
+                className={clsx("btn py-2.5", payment === "card" ? "bg-fib text-white" : "bg-black/5 dark:bg-white/10")}
               >
                 <CreditCard size={18} /> {t("common.card")}
               </button>
