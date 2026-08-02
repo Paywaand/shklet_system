@@ -1,15 +1,18 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Lock, Trash2, Plus, ArrowUpFromLine, Users, History, RotateCcw } from "lucide-react";
+import { Lock, Trash2, Plus, ArrowUpFromLine, Users, History, RotateCcw, Wallet } from "lucide-react";
 import { useFetch, apiSend } from "@/lib/client";
 import { iqd, shortDate, localMonthKey, monthLabel } from "@/lib/format";
-import type { CashTracking, CashLogEntry, WithdrawalLogEntry } from "@/lib/types";
+import type { CashTracking, CashLogEntry, WithdrawalLogEntry, MoneyLedgerBalance, MoneyLedgerLogEntry } from "@/lib/types";
 import { WITHDRAWAL_SOURCES, type WithdrawalSource } from "@/lib/cash";
+import { MONEY_LEDGER_BUCKETS, type MoneyLedgerBucket } from "@/lib/moneyLedger";
 import { useSession } from "@/lib/session";
 import { useToast } from "@/components/Toast";
 import { PageHeader } from "@/components/PageHeader";
 import { Loading, ErrorState, Modal } from "@/components/ui";
+
+const BUCKET_LABEL: Record<MoneyLedgerBucket, string> = { pos: "POS", fib: "FIB", delivery: "Delivery" };
 
 // Admin-only Cash Tracking — moved off the Sales (Analytics) page into its own
 // section. "Expected Cash on Hand" stays on the Sales page; this page holds the
@@ -22,6 +25,15 @@ export default function CashTrackingPage() {
   const { data, loading, error, reload } = useFetch<CashTracking>(
     isAdmin ? "/api/cash-tracking" : null
   );
+  // Real platform name (Toters/Talabat) for the Delivery bucket's label, same
+  // convention as the Sales page's balance card.
+  const { data: deliverySettings } = useFetch<{ settings: { platformName: string } }>(
+    isAdmin ? "/api/delivery/settings" : null
+  );
+  const bucketLabel: Record<MoneyLedgerBucket, string> = {
+    ...BUCKET_LABEL,
+    delivery: deliverySettings?.settings.platformName ?? BUCKET_LABEL.delivery,
+  };
 
   if (!isAdmin) {
     return (
@@ -45,6 +57,9 @@ export default function CashTrackingPage() {
       <PageHeader title="Cash Tracking" subtitle="Safe balance & withdrawals — admin only" />
       <CashBaselineCard />
       <CashTrackingSection data={data} onChanged={reload} />
+      {MONEY_LEDGER_BUCKETS.map((bucket) => (
+        <MoneyLedgerSection key={bucket} bucket={bucket} label={bucketLabel[bucket]} />
+      ))}
     </>
   );
 }
@@ -664,6 +679,232 @@ function WithdrawModal({
         </button>
         <button className="btn-primary flex-1 py-2.5" onClick={save} disabled={saving || !valid}>
           Withdraw
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---- POS / FIB / Delivery ledgers — same mechanics for all three buckets, so
+// one parameterized section + modal instead of tripling near-identical JSX. ----
+function MoneyLedgerSection({ bucket, label }: { bucket: MoneyLedgerBucket; label: string }) {
+  const toast = useToast();
+  const [addKind, setAddKind] = useState<"opening" | "settlement" | null>(null);
+
+  const { data: balance, reload: reloadBalance } = useFetch<MoneyLedgerBalance>(
+    `/api/money-ledger?bucket=${bucket}`
+  );
+  const { data: entriesData, reload: reloadEntries } = useFetch<{ entries: MoneyLedgerLogEntry[] }>(
+    `/api/money-ledger/entries?bucket=${bucket}`
+  );
+  const { data: baselineData, reload: reloadBaseline } = useFetch<{ baselineAt: string | null }>(
+    `/api/money-ledger/baseline?bucket=${bucket}`
+  );
+  const entries = entriesData?.entries ?? [];
+  const baselineAt = baselineData?.baselineAt ?? null;
+
+  function reloadAll() {
+    reloadBalance();
+    reloadEntries();
+    reloadBaseline();
+  }
+
+  async function resetFromNow() {
+    if (!confirm(`Reset the ${label} balance from right now? Nothing before this moment will count anymore.`))
+      return;
+    try {
+      await apiSend("/api/money-ledger/baseline", "PUT", { bucket, baselineAt: new Date().toISOString() });
+      toast.show(`${label} balance reset`);
+      reloadAll();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+    }
+  }
+
+  async function clearBaseline() {
+    try {
+      await apiSend("/api/money-ledger/baseline", "PUT", { bucket, baselineAt: null });
+      toast.show("Baseline cleared — back to all-time");
+      reloadAll();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+    }
+  }
+
+  async function remove(entry: MoneyLedgerLogEntry) {
+    if (!confirm("Delete this entry? This cannot be undone.")) return;
+    try {
+      await apiSend(`/api/money-ledger/entries/${entry.id}?bucket=${bucket}`, "DELETE");
+      toast.show("Entry deleted");
+      reloadAll();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+    }
+  }
+
+  return (
+    <section className="card p-5 mb-5 border-corn/40">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div className="flex items-center gap-2">
+          <Wallet size={18} className="text-corn-600" />
+          <h2 className="text-lg font-extrabold">{label}</h2>
+          <span className="chip bg-corn/20 text-cocoa text-[11px]">Admin only</span>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-ghost px-2.5 py-1.5 text-xs" onClick={() => setAddKind("opening")}>
+            <Plus size={14} /> Opening balance
+          </button>
+          <button className="btn-ghost px-2.5 py-1.5 text-xs" onClick={() => setAddKind("settlement")}>
+            <ArrowUpFromLine size={14} /> Settlement
+          </button>
+        </div>
+      </div>
+
+      {balance && (
+        <div className="rounded-xl bg-black/[0.03] dark:bg-white/[0.04] p-4 mb-3">
+          <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">Running balance</p>
+          <p className="text-2xl font-extrabold mt-1">{iqd(balance.runningBalance)}</p>
+          <p className="text-xs opacity-50 mt-0.5">
+            Opening {iqd(balance.openingTotal)} + this period {iqd(balance.accrual)} − settlements{" "}
+            {iqd(balance.settlementTotal)}
+          </p>
+        </div>
+      )}
+
+      <p className="text-xs opacity-60 mb-2">
+        {baselineAt
+          ? `Activity before ${shortDate(baselineAt)} is excluded from this balance.`
+          : "No baseline set — this balance counts all-time activity."}
+      </p>
+      <div className="flex gap-2 mb-3">
+        <button className="btn-ghost px-3 py-2 text-xs" onClick={resetFromNow}>
+          <RotateCcw size={13} /> Reset from today
+        </button>
+        {baselineAt && (
+          <button className="btn-ghost px-3 py-2 text-xs" onClick={clearBaseline}>
+            Clear baseline
+          </button>
+        )}
+      </div>
+
+      {entries.length === 0 ? (
+        <p className="text-xs opacity-50 py-2">No entries logged yet.</p>
+      ) : (
+        <ul className="flex flex-col divide-y divide-black/5 dark:divide-white/5 max-h-56 overflow-y-auto">
+          {entries.map((e) => (
+            <li key={e.id} className="flex items-center gap-2 py-2 text-sm">
+              <div className="flex-1 min-w-0">
+                <p className="font-bold">
+                  {e.kind === "settlement" ? "−" : "+"}
+                  {iqd(e.amount)}{" "}
+                  <span
+                    className={
+                      "chip text-[10px] ms-1 " +
+                      (e.kind === "settlement" ? "bg-red-500/15 text-red-500" : "bg-leaf/20 text-leaf")
+                    }
+                  >
+                    {e.kind}
+                  </span>
+                </p>
+                <p className="text-xs opacity-60 truncate">
+                  {shortDate(e.date)}
+                  {e.createdBy ? ` — ${e.createdBy.fullName}` : ""}
+                  {e.note ? ` — ${e.note}` : ""}
+                </p>
+              </div>
+              <button
+                className="btn-ghost size-7 rounded-lg text-red-500 shrink-0"
+                title="Delete entry"
+                onClick={() => remove(e)}
+              >
+                <Trash2 size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {addKind && (
+        <MoneyLedgerEntryModal
+          bucket={bucket}
+          kind={addKind}
+          label={label}
+          onClose={() => setAddKind(null)}
+          onSaved={() => {
+            setAddKind(null);
+            reloadAll();
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+function MoneyLedgerEntryModal({
+  bucket,
+  kind,
+  label,
+  onClose,
+  onSaved,
+}: {
+  bucket: MoneyLedgerBucket;
+  kind: "opening" | "settlement";
+  label: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await apiSend("/api/money-ledger/entries", "POST", { bucket, kind, date, amount, note });
+      toast.show(kind === "opening" ? "Opening balance added" : "Settlement added");
+      onSaved();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : "Failed", "error");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`${label} — ${kind === "opening" ? "Add opening balance" : "Add settlement"}`}>
+      <p className="text-sm opacity-70 mb-3">
+        {kind === "opening"
+          ? `A one-time starting balance for ${label} — money already sitting in this bucket before it started being tracked here.`
+          : `Money that left ${label} (e.g. paid out to the bank, or transferred out). Reduces the running balance.`}
+      </p>
+      <div className="flex flex-col gap-3">
+        <div>
+          <label className="label">Date</label>
+          <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">Amount (IQD)</label>
+          <input
+            className="input"
+            type="number"
+            inputMode="numeric"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <div>
+          <label className="label">Note (optional)</label>
+          <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
+        </div>
+      </div>
+      <div className="flex gap-2 mt-5">
+        <button className="btn-ghost flex-1 py-2.5" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn-primary flex-1 py-2.5" onClick={save} disabled={saving || !amount}>
+          Add
         </button>
       </div>
     </Modal>

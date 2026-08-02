@@ -2,16 +2,46 @@
 
 import Link from "next/link";
 import { AlertTriangle, BarChart3, TrendingUp, Wallet, Boxes, Receipt } from "lucide-react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  PieChart,
+  Pie,
+  Cell,
+  CartesianGrid,
+} from "recharts";
 import { useFetch } from "@/lib/client";
 import { iqd, num } from "@/lib/format";
 import { useSession } from "@/lib/session";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { PageHeader } from "@/components/PageHeader";
+import { ChartCard } from "@/components/ChartCard";
 import { Loading, ErrorState, EmptyState } from "@/components/ui";
+
+// Same 5 fixed categories as the Expenses page (see expenses/page.tsx).
+const EXPENSE_CATEGORIES = ["Rent", "Utilities", "Supplies", "Staff", "Other"];
+const CATEGORY_COLORS = ["#FEDB00", "#EF3340", "#00A29A", "#232222", "#CBA3D8"];
+
+type MonthTotals = { revenue: number; expenses: number };
+type MonthComparison = {
+  available: boolean;
+  thisMonth: MonthTotals;
+  revenuePctChange: number | null;
+  expensesPctChange: number | null;
+};
 
 type DashboardData = {
   today: { orders: number; revenue: number; unpaidCount: number; unpaidAmount: number };
   month: { netProfit: number; expectedCashOnHand: number };
+  mom: MonthComparison & { lastMonth: MonthTotals };
+  yoy: MonthComparison & { lastYear: MonthTotals };
+  expensesByCategory: { category: string; amount: number }[];
+  expensesByCategoryTrend: ({ month: string } & Record<string, number | string>)[];
   lowStock: {
     count: number;
     items: { name: string; quantity: number; unit: string; minThreshold: number }[];
@@ -43,7 +73,7 @@ export default function DashboardPage() {
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (!data) return null;
 
-  const { today, month, lowStock } = data;
+  const { today, month, mom, yoy, expensesByCategory, expensesByCategoryTrend, lowStock } = data;
 
   return (
     <>
@@ -99,6 +129,9 @@ export default function DashboardPage() {
         </div>
       )}
 
+      <MomYoySection mom={mom} yoy={yoy} />
+      <ExpensesByCategorySection byCategory={expensesByCategory} trend={expensesByCategoryTrend} />
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <QuickLink href="/analytics" icon={<BarChart3 size={18} />} label={t("nav.sales")} />
         <QuickLink href="/profit" icon={<TrendingUp size={18} />} label="Profit" />
@@ -106,6 +139,137 @@ export default function DashboardPage() {
         <QuickLink href="/expenses" icon={<Receipt size={18} />} label={t("nav.expenses")} />
       </div>
     </>
+  );
+}
+
+// ---- Month-over-month / year-over-year revenue & expense comparison ----
+function MomYoySection({
+  mom,
+  yoy,
+}: {
+  mom: DashboardData["mom"];
+  yoy: DashboardData["yoy"];
+}) {
+  const { t } = useLanguage();
+  return (
+    <div className="grid md:grid-cols-2 gap-4 mb-5">
+      <div className="card p-4">
+        <h2 className="font-bold mb-3">{t("dashboard.mom.title")}</h2>
+        {mom.available ? (
+          <div className="grid grid-cols-2 gap-3">
+            <DeltaStat label={t("dashboard.mom.revenue")} value={iqd(mom.thisMonth.revenue)} pct={mom.revenuePctChange} />
+            <DeltaStat
+              label={t("dashboard.mom.expenses")}
+              value={iqd(mom.thisMonth.expenses)}
+              pct={mom.expensesPctChange}
+              invert
+            />
+          </div>
+        ) : (
+          <EmptyState title={t("dashboard.mom.notEnoughData")} />
+        )}
+      </div>
+      <div className="card p-4">
+        <h2 className="font-bold mb-3">{t("dashboard.yoy.title")}</h2>
+        {yoy.available ? (
+          <div className="grid grid-cols-2 gap-3">
+            <DeltaStat label={t("dashboard.yoy.revenue")} value={iqd(yoy.thisMonth.revenue)} pct={yoy.revenuePctChange} />
+            <DeltaStat
+              label={t("dashboard.yoy.expenses")}
+              value={iqd(yoy.thisMonth.expenses)}
+              pct={yoy.expensesPctChange}
+              invert
+            />
+          </div>
+        ) : (
+          <EmptyState title={t("dashboard.yoy.notEnoughData")} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// A rising number is good for revenue but bad for expenses — `invert` flips
+// which direction counts as "good" (leaf) vs "bad" (red).
+function DeltaStat({
+  label,
+  value,
+  pct,
+  invert,
+}: {
+  label: string;
+  value: string;
+  pct: number | null;
+  invert?: boolean;
+}) {
+  const isUp = pct != null && pct > 0;
+  const isGood = pct == null ? null : invert ? !isUp : isUp;
+  return (
+    <div>
+      <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">{label}</p>
+      <p className="text-lg font-extrabold mt-0.5">{value}</p>
+      {pct != null ? (
+        <p className={`text-xs font-semibold mt-0.5 ${isGood ? "text-leaf" : "text-red-500"}`}>
+          {isUp ? "▲" : "▼"} {Math.abs(pct).toFixed(1)}%
+        </p>
+      ) : (
+        <p className="text-xs opacity-40 mt-0.5">—</p>
+      )}
+    </div>
+  );
+}
+
+// ---- Expenses by category (current month) + trend over the last 6 months ----
+function ExpensesByCategorySection({
+  byCategory,
+  trend,
+}: {
+  byCategory: DashboardData["expensesByCategory"];
+  trend: DashboardData["expensesByCategoryTrend"];
+}) {
+  const { t } = useLanguage();
+  const pieData = byCategory
+    .filter((c) => c.amount > 0)
+    .map((c) => ({
+      name: c.category,
+      value: c.amount,
+      color: CATEGORY_COLORS[EXPENSE_CATEGORIES.indexOf(c.category) % CATEGORY_COLORS.length],
+    }));
+
+  return (
+    <div className="grid lg:grid-cols-2 gap-4 mb-5">
+      <ChartCard title={t("dashboard.expensesByCategory.title")}>
+        {pieData.length === 0 ? (
+          <EmptyState title={t("sales.charts.noData")} />
+        ) : (
+          <ResponsiveContainer width="100%" height={240}>
+            <PieChart>
+              <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} label>
+                {pieData.map((d) => (
+                  <Cell key={d.name} fill={d.color} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(v: number) => iqd(v)} />
+            </PieChart>
+          </ResponsiveContainer>
+        )}
+      </ChartCard>
+
+      <ChartCard title={t("dashboard.expensesByCategory.trend")}>
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={trend}>
+            <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
+            <XAxis dataKey="month" tickFormatter={(m: string) => m.slice(5)} fontSize={11} />
+            <YAxis tickFormatter={(v) => num(v)} fontSize={11} width={60} />
+            <Tooltip formatter={(v: number) => iqd(v)} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            {EXPENSE_CATEGORIES.map((category, i) => (
+              <Bar key={category} dataKey={category} stackId="a" fill={CATEGORY_COLORS[i % CATEGORY_COLORS.length]} />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      </ChartCard>
+    </div>
   );
 }
 

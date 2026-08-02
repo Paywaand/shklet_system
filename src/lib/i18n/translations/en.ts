@@ -57,6 +57,22 @@ export const en: Dict = {
     andMore: "and {n} more",
     viewSales: "View Sales",
     viewInventory: "View Inventory",
+    mom: {
+      title: "Month over month",
+      revenue: "Revenue vs. last month",
+      expenses: "Expenses vs. last month",
+      notEnoughData: "Not enough data yet — check back once a full month has passed since go-live.",
+    },
+    yoy: {
+      title: "Year over year",
+      revenue: "Revenue vs. last year",
+      expenses: "Expenses vs. last year",
+      notEnoughData: "Not enough historical data yet — this needs 12+ months since go-live.",
+    },
+    expensesByCategory: {
+      title: "Expenses by category (this month)",
+      trend: "Category trend (last 6 months)",
+    },
   },
 
   expenses: {
@@ -144,6 +160,18 @@ export const en: Dict = {
     expectedCash: {
       title: "Expected Cash on Hand",
       hint: "How much physical cash should currently be held (current month unless a custom range is set).",
+    },
+    pos: {
+      title: "POS",
+    },
+    fib: {
+      title: "FIB",
+    },
+    delivery: {
+      title: "Delivery",
+    },
+    ledger: {
+      periodAccrual: "This period: {amount}",
     },
     stats: {
       orders: "Orders",

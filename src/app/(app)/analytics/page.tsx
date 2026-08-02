@@ -22,12 +22,14 @@ import {
   businessDayRangeISO,
   type BusinessHours,
 } from "@/lib/businessDay";
-import type { Order, ExpectedCash } from "@/lib/types";
+import type { Order, ExpectedCash, MoneyLedgerBalance } from "@/lib/types";
 import type { PaymentMethod } from "@/lib/paymentMethods";
+import type { MoneyLedgerBucket } from "@/lib/moneyLedger";
 import { useSession } from "@/lib/session";
 import { useToast } from "@/components/Toast";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { PageHeader } from "@/components/PageHeader";
+import { ChartCard } from "@/components/ChartCard";
 import { Loading, ErrorState, EmptyState } from "@/components/ui";
 
 type Analytics = {
@@ -167,6 +169,32 @@ export default function AnalyticsPage() {
   }, [range, activeRange, eventId]);
   const cash = useFetch<ExpectedCash>(cashUrl);
 
+  // POS / FIB / Delivery running balances — same scope rules as cashUrl (event
+  // filter always applies; the picked date range only applies once "custom" is
+  // fully chosen), just parameterized per bucket.
+  const ledgerBaseQs = useMemo(() => {
+    const qs = new URLSearchParams();
+    if (eventId !== "all") qs.set("eventId", eventId);
+    if (range === "custom" && activeRange) {
+      qs.set("from", activeRange.from);
+      qs.set("to", activeRange.to);
+    }
+    return qs;
+  }, [range, activeRange, eventId]);
+
+  function ledgerUrl(bucket: MoneyLedgerBucket): string {
+    const qs = new URLSearchParams(ledgerBaseQs);
+    qs.set("bucket", bucket);
+    return `/api/money-ledger?${qs.toString()}`;
+  }
+
+  const posLedger = useFetch<MoneyLedgerBalance>(ledgerUrl("pos"));
+  const fibLedger = useFetch<MoneyLedgerBalance>(ledgerUrl("fib"));
+  const deliveryLedger = useFetch<MoneyLedgerBalance>(ledgerUrl("delivery"));
+  const { data: deliverySettings } = useFetch<{
+    settings: { platformName: string; color: string };
+  }>("/api/delivery/settings");
+
   const [query, setQuery] = useState("");
   const [pmFilter, setPmFilter] = useState<"all" | PaymentMethod>("all");
   const [otFilter, setOtFilter] = useState<"all" | "walk_in" | "takeaway">("all");
@@ -275,9 +303,24 @@ export default function AnalyticsPage() {
 
       <MonthExport branchId={branchId} eventId={eventId} />
 
-      {/* Expected Cash on Hand (manager + admin). The detailed admin-only Cash
-          Tracking (safe + withdrawals) now lives on its own /cash-tracking page. */}
-      {cash.data && <ExpectedCashCard data={cash.data} />}
+      {/* Four money buckets (manager + admin): Cash, POS, FIB, Delivery. Detailed
+          admin-only ledger management (opening balances, settlements) lives on
+          the /cash-tracking page — this is the at-a-glance running balance. */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        {cash.data && <ExpectedCashCard data={cash.data} />}
+        {posLedger.data && (
+          <LedgerBalanceCard label={t("sales.pos.title")} data={posLedger.data} />
+        )}
+        {fibLedger.data && (
+          <LedgerBalanceCard label={t("sales.fib.title")} data={fibLedger.data} />
+        )}
+        {deliveryLedger.data && (
+          <LedgerBalanceCard
+            label={deliverySettings?.settings.platformName ?? t("sales.delivery.title")}
+            data={deliveryLedger.data}
+          />
+        )}
+      </div>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
@@ -686,26 +729,36 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
   );
 }
 
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+// ---- Four money buckets (manager + admin): Cash, POS, FIB, Delivery ----
+function ExpectedCashCard({ data }: { data: ExpectedCash }) {
+  const { t } = useLanguage();
   return (
-    <div className="card p-4">
-      <h3 className="font-bold mb-3">{title}</h3>
-      {children}
+    <div className="card p-4 border-leaf/40 bg-leaf-50 dark:bg-leaf/10">
+      <div className="flex items-center gap-2 mb-1">
+        <Wallet size={18} className="text-leaf" />
+        <h2 className="font-extrabold">{t("sales.expectedCash.title")}</h2>
+      </div>
+      <p className="text-2xl font-extrabold text-leaf">{iqd(data.expectedCashOnHand)}</p>
+      <p className="text-xs opacity-50 mt-1">{t("sales.expectedCash.hint")}</p>
     </div>
   );
 }
 
-// ---- Item 6: Expected Cash on Hand (manager + admin) ----
-function ExpectedCashCard({ data }: { data: ExpectedCash }) {
+// Running balance card for the POS / FIB / Delivery buckets — same shape as
+// ExpectedCashCard but generic across bucket, since the underlying figure
+// (opening + period accrual − settlements) is identical math for all three.
+function LedgerBalanceCard({ label, data }: { label: string; data: MoneyLedgerBalance }) {
   const { t } = useLanguage();
   return (
-    <div className="card p-5 mb-5 border-leaf/40 bg-leaf-50 dark:bg-leaf/10">
+    <div className="card p-4">
       <div className="flex items-center gap-2 mb-1">
-        <Wallet size={20} className="text-leaf" />
-        <h2 className="text-lg font-extrabold">{t("sales.expectedCash.title")}</h2>
+        <Wallet size={18} className="opacity-60" />
+        <h2 className="font-extrabold">{label}</h2>
       </div>
-      <p className="text-3xl font-extrabold text-leaf">{iqd(data.expectedCashOnHand)}</p>
-      <p className="text-xs opacity-50 mt-1">{t("sales.expectedCash.hint")}</p>
+      <p className="text-2xl font-extrabold">{iqd(data.runningBalance)}</p>
+      <p className="text-xs opacity-50 mt-1">
+        {t("sales.ledger.periodAccrual", { amount: iqd(data.accrual) })}
+      </p>
     </div>
   );
 }

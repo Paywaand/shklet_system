@@ -46,10 +46,11 @@ model User {
   expenses        Expense[]
   deliveryOrders  DeliveryOrder[]
   dailyNeedsLogs  DailyNeedsLog[]
-  safeEntries     SafeEntry[]
-  withdrawals     CashWithdrawal[]
-  cashAdjustments CashAdjustment[]
-  sessions        Session[]
+  safeEntries        SafeEntry[]
+  withdrawals        CashWithdrawal[]
+  cashAdjustments    CashAdjustment[]
+  moneyLedgerEntries MoneyLedgerEntry[]
+  sessions           Session[]
 
   @@index([branchId])
 }
@@ -473,5 +474,39 @@ model CashSettings {
   branch     String    @unique // "suli" | "erbil" (city)
   baselineAt DateTime?
   updatedAt  DateTime  @updatedAt
+}
+
+// ----------------------- Money ledgers (POS / FIB / Delivery running balances, per-branch) -----------------------
+// Unlike Cash (Safe/Manager, tracked above), POS, FIB ("card"), and Delivery
+// have no persisted balance anywhere else in the app — they're just period
+// totals recomputed from Order/DeliveryOrder each time. These two models give
+// each of those three "buckets" the same running-balance treatment Cash
+// already has: a go-live baseline (mirrors CashSettings) plus dated entries
+// that credit (opening) or debit (settlement) the running balance (mirrors
+// CashAdjustment). See src/lib/moneyLedger.ts for the balance computation.
+model MoneyLedgerBaseline {
+  id         String    @id @default(cuid())
+  branch     String // "suli" | "erbil" (city)
+  bucket     String // "pos" | "fib" | "delivery"
+  baselineAt DateTime?
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([branch, bucket])
+}
+
+model MoneyLedgerEntry {
+  id          String   @id @default(cuid())
+  branch      String // "suli" | "erbil" (city)
+  bucket      String // "pos" | "fib" | "delivery"
+  kind        String // "opening" (credits the running balance, one-time starting point) | "settlement" (debits it — money paid out / transferred out of the bucket)
+  date        DateTime
+  amount      Int // IQD, positive; sign applied by kind when summing
+  note        String?
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([branch, bucket])
+  @@index([date])
 }
 

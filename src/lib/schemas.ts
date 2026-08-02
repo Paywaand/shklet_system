@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { WITHDRAWAL_SOURCES } from "./cash";
+import { MONEY_LEDGER_BUCKETS } from "./moneyLedger";
 
 // Hard caps that bound parse work and storage size.
 export const MAX_JSON_BYTES = 16 * 1024; // 16 KB is plenty for these small lists
@@ -77,3 +78,16 @@ export const WithdrawalInputSchema = z.object({
   note: z.string().trim().max(MAX_STR).optional(),
 });
 export type WithdrawalInput = z.infer<typeof WithdrawalInputSchema>;
+
+// ---- Money ledger entry input (POST /api/money-ledger/entries) ----
+// "opening" credits the running balance (one-time starting point); "settlement"
+// debits it (money paid out / transferred out of the bucket). Shape only — the
+// route itself enforces admin-only access.
+export const MoneyLedgerEntryInputSchema = z.object({
+  bucket: z.enum(MONEY_LEDGER_BUCKETS),
+  kind: z.enum(["opening", "settlement"]),
+  amount: z.coerce.number().int().positive(),
+  date: z.string().trim().min(1).optional(),
+  note: z.string().trim().max(MAX_STR).optional(),
+});
+export type MoneyLedgerEntryInput = z.infer<typeof MoneyLedgerEntryInputSchema>;

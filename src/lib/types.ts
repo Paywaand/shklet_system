@@ -198,6 +198,25 @@ export type ExpectedCash = {
   period: { from: string | null; to: string | null };
 };
 
+// ---- POS / FIB / Delivery running balances (see src/lib/moneyLedger.ts) ----
+export type MoneyLedgerBalance = {
+  accrual: number;
+  openingTotal: number;
+  settlementTotal: number;
+  runningBalance: number;
+  period: { from: string | null; to: string | null };
+};
+
+// Admin-only Cash Tracking page log row for a single opening/settlement entry.
+export type MoneyLedgerLogEntry = {
+  id: string;
+  date: string;
+  kind: "opening" | "settlement";
+  amount: number;
+  note: string | null;
+  createdBy: { fullName: string } | null;
+};
+
 export type CashLogEntry = {
   id: string;
   date: string;
