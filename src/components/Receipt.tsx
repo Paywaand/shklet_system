@@ -136,7 +136,17 @@ export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => v
 
         {/* Controls are excluded from the printed output by globals.css. */}
         <div className="receipt-actions">
-          <button className="btn bg-leaf text-white px-4 py-2" onClick={() => window.print()}>
+          <button
+            className="btn bg-leaf text-white px-4 py-2"
+            onClick={() => {
+              // Kiosk-printing (Chrome, --kiosk-printing) prints silently and
+              // returns immediately — there is no dialog left for the cashier
+              // to dismiss, so close this preview right away instead of
+              // requiring a separate manual "Close" click.
+              window.print();
+              onClose();
+            }}
+          >
             {t("receipt.print")}
           </button>
           <button className="btn bg-black/5 dark:bg-white/10 px-4 py-2" onClick={onClose}>
