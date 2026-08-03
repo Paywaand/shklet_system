@@ -181,12 +181,32 @@ export default function CashierPage() {
         });
       } else {
         // Delivery is out of scope for offline mode — online only.
-        await apiSend<{ order: DeliveryOrder }>("/api/delivery-orders", "POST", {
+        const created = await apiSend<{ order: DeliveryOrder }>("/api/delivery-orders", "POST", {
           reference: reference || null,
           items: lineItemsPayload(),
         });
         toast.show(t("cashier.toast.deliveryPlaced"));
         pos.refreshActive();
+        // The kitchen still needs a ticket for a delivery order — it's the
+        // same food, made the same way, regardless of which platform (Toters,
+        // Talabat, ...) the customer ordered through.
+        setReceipt({
+          pagerNumber: null,
+          placedAt: created.order.placedAt,
+          orderType: "delivery",
+          paymentMethod: "",
+          isPaid: true,
+          total: created.order.grossTotal,
+          platformName: created.order.platformName,
+          reference: created.order.reference,
+          lines: cart.map((l) => ({
+            key: l.key,
+            name: l.name,
+            price: l.price,
+            quantity: l.quantity,
+            modifier: l.modifier,
+          })),
+        });
       }
       clearCart();
       setReference("");

@@ -37,6 +37,11 @@ export type ReceiptData = {
   isPaid: boolean;
   total: number;
   lines: ReceiptLine[];
+  // Delivery only — there is no pager or cash/card/pos payment method for a
+  // delivery order, so the ticket substitutes the platform (Toters, Talabat,
+  // whichever this branch has configured) and the driver/order reference.
+  platformName?: string;
+  reference?: string | null;
 };
 
 export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => void }) {
@@ -70,8 +75,12 @@ export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => v
     ? placed.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })
     : shortDate(placed);
 
-  const typeLabel =
-    data.orderType === "takeaway" ? t("cashier.cart.takeAway") : t("receipt.dineIn");
+  const isDelivery = data.orderType === "delivery";
+  const typeLabel = isDelivery
+    ? data.platformName ?? t("cashier.cart.delivery")
+    : data.orderType === "takeaway"
+      ? t("cashier.cart.takeAway")
+      : t("receipt.dineIn");
 
   const paymentLabel =
     data.paymentMethod === "cash"
@@ -87,12 +96,23 @@ export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => v
           <p className="r-brand">Shklet</p>
 
           {/* The pager is what the kitchen calls the order by, so it is the
-              single largest thing on the ticket. */}
-          {data.pagerNumber != null && (
+              single largest thing on the ticket. Delivery orders have no
+              pager — the driver/order reference substitutes, when given. */}
+          {data.pagerNumber != null ? (
             <div className="r-big">
               <div className="r-big-label">{data.pagerNumber}</div>
               <div className="r-ref">{t("receipt.pager")}</div>
             </div>
+          ) : (
+            isDelivery &&
+            data.reference && (
+              <div className="r-big">
+                <div className="r-big-label">
+                  <bdi>{data.reference}</bdi>
+                </div>
+                <div className="r-ref">{t("cashier.cart.driverRefLabel")}</div>
+              </div>
+            )
           )}
 
           <hr className="r-rule" />
@@ -126,12 +146,20 @@ export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => v
           <div className="r-total">
             {t("receipt.total")}: <bdi>{money(data.total)}</bdi>
           </div>
-          <div className="r-paid">
-            {paymentLabel} —{" "}
-            <span className={data.isPaid ? "r-paid-yes" : "r-paid-no"}>
-              {data.isPaid ? t("receipt.paid") : t("receipt.notPaid")}
-            </span>
-          </div>
+          {/* Delivery has no cash/card/pos distinction or paid/unpaid state —
+              the platform handles payment, not the till. */}
+          {isDelivery ? (
+            <div className="r-paid">
+              {t("cashier.cart.paymentHandledByDelivery", { platform: typeLabel })}
+            </div>
+          ) : (
+            <div className="r-paid">
+              {paymentLabel} —{" "}
+              <span className={data.isPaid ? "r-paid-yes" : "r-paid-no"}>
+                {data.isPaid ? t("receipt.paid") : t("receipt.notPaid")}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Controls are excluded from the printed output by globals.css. */}
