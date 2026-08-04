@@ -51,16 +51,16 @@ export async function PATCH(req: Request, props: { params: Promise<{ id: string 
 
 // DELETE /api/delivery-orders/:id — permanently remove a delivery order.
 //
-// ADMIN-ONLY by role (the same model as branch order deletion + salary/delivery
-// revenue): even though all roles can *place* delivery orders, only an admin may
-// delete one. A non-admin session (e.g. a cashier) hitting this endpoint directly
-// — via the console or curl — gets a 403. Hard-delete; DeliveryOrderItem rows
-// cascade (onDelete: Cascade in the schema), so no constraint errors.
+// ADMIN/MANAGER-ONLY by role (the same model as branch order deletion): even
+// though all roles can *place* delivery orders, only an admin or manager may
+// delete one. A cashier session hitting this endpoint directly — via the
+// console or curl — gets a 403. Hard-delete; DeliveryOrderItem rows cascade
+// (onDelete: Cascade in the schema), so no constraint errors.
 export async function DELETE(_req: Request, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const guard = await authorize();
   if (!guard.ok) return guard.response;
-  if (guard.session.role !== "admin")
+  if (guard.session.role !== "admin" && guard.session.role !== "manager")
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const branch = await activeBranch(guard.session);
 

@@ -108,6 +108,9 @@ export default function AnalyticsPage() {
   const { user, businessHours } = useSession();
   const { t } = useLanguage();
   const isAdmin = user.role === "admin";
+  // Deleting an order (hard, permanent) is admin/manager — not cashiers. Server
+  // enforces this too (see DELETE /api/orders/:id); this only controls the button.
+  const canDeleteOrders = user.role === "admin" || user.role === "manager";
   const toast = useToast();
   const [range, setRange] = useState<RangeKey>("today");
   const [customFrom, setCustomFrom] = useState("");
@@ -464,7 +467,7 @@ export default function AnalyticsPage() {
                   <th className="py-2 pr-3">{t("sales.table.placed")}</th>
                   <th className="py-2 pr-3">{t("sales.table.prep")}</th>
                   <th className="py-2">{t("sales.table.staff")}</th>
-                  {isAdmin && <th className="py-2 text-right">{t("sales.table.actions")}</th>}
+                  {canDeleteOrders && <th className="py-2 text-right">{t("sales.table.actions")}</th>}
                 </tr>
               </thead>
               <tbody>
@@ -519,7 +522,7 @@ export default function AnalyticsPage() {
                     </td>
                     <td className="py-2 pr-3 opacity-70">{duration(o.durationSeconds)}</td>
                     <td className="py-2 opacity-70">{o.staff?.fullName ?? "—"}</td>
-                    {isAdmin && (
+                    {canDeleteOrders && (
                       <td className="py-2 text-right">
                         <button
                           className="btn-ghost size-8 rounded-lg text-red-500"

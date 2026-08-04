@@ -46,16 +46,16 @@ export async function PATCH(req: Request, props: { params: Promise<{ id: string 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
 
-// DELETE /api/orders/:id — permanently remove an order. Admin-only (enforced by
-// role, like salary/Toters revenue), so managers/cashiers can't delete via the
-// API even though they can reach order actions. Hard-delete matches the rest of
-// the codebase; OrderItems cascade, so the order vanishes from every report,
-// chart, total, and export automatically.
+// DELETE /api/orders/:id — permanently remove an order. Admin/manager-only
+// (enforced by role), so cashiers can't delete via the API even though they
+// can reach order actions. Hard-delete matches the rest of the codebase;
+// OrderItems cascade, so the order vanishes from every report, chart, total,
+// and export automatically.
 export async function DELETE(_req: Request, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const guard = await authorize();
   if (!guard.ok) return guard.response;
-  if (guard.session.role !== "admin")
+  if (guard.session.role !== "admin" && guard.session.role !== "manager")
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const branch = await activeBranch(guard.session);

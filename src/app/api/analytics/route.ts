@@ -56,6 +56,19 @@ export async function GET(req: Request) {
   const bday = businessDayExpr(Prisma.sql`o."placedAt"`, businessHours, SYSTEM_TIME_ZONE);
   const hour = localHourExpr(Prisma.sql`o."placedAt"`, SYSTEM_TIME_ZONE);
 
+  // Delivery-platform orders (Toters/Talabat) live in a separate table with no
+  // branchId/eventId column (city-scoped only), so they can't go through
+  // orderScopeSql — this mirrors its branch + date-range + not-cancelled
+  // conditions by hand, including the same UTC-safe cast (see orderScope.ts's
+  // comment on why a bound Date must not be compared to `placedAt` uncast).
+  const deliveryWhere = Prisma.sql`
+    d."branch" = ${branch}
+    AND d."placedAt" >= (${gte}::timestamptz AT TIME ZONE 'UTC')
+    AND d."placedAt" <= (${lte}::timestamptz AT TIME ZONE 'UTC')
+    AND d."status" <> 'cancelled'
+  `;
+  const deliveryBday = businessDayExpr(Prisma.sql`d."placedAt"`, businessHours, SYSTEM_TIME_ZONE);
+
   // One scan, four rollups. GROUPING SETS yields revenue-by-business-day,
   // orders-by-hour, the payment split and the grand total from a single pass;
   // the GROUPING() flags say which rollup each row belongs to.
@@ -70,7 +83,9 @@ export async function GET(req: Request) {
     revenue: bigint;
   };
 
-  const [rollup, timing, slowest, topItems] = await Promise.all([
+  type DeliveryRollupRow = { g_bday: number; bday: Date | null; cnt: bigint; revenue: bigint };
+
+  const [rollup, timing, slowest, topItems, deliveryRollup] = await Promise.all([
     prisma.$queryRaw<RollupRow[]>`
       WITH src AS (
         SELECT ${bday} AS bday, ${hour} AS hr, o."paymentMethod" AS pm, o."total" AS total
@@ -116,15 +131,46 @@ export async function GET(req: Request) {
       ORDER BY qty DESC
       LIMIT 10
     `,
+    // Delivery revenue counts at NET (gross minus the platform's commission
+    // %) — that commission never reaches the business, so it must not appear
+    // in "how much the day made". grossTotal is still available on the
+    // DeliveryOrder row itself for anyone who needs the pre-commission figure.
+    prisma.$queryRaw<DeliveryRollupRow[]>`
+      WITH dsrc AS (
+        SELECT ${deliveryBday} AS bday, d."netTotal" AS net
+        FROM "DeliveryOrder" d
+        WHERE ${deliveryWhere}
+      )
+      SELECT GROUPING(bday) AS g_bday, bday,
+             COUNT(*)::bigint AS cnt, COALESCE(SUM(net), 0)::bigint AS revenue
+      FROM dsrc
+      GROUP BY GROUPING SETS ((bday), ())
+    `,
   ]);
 
   // Unpack the grouping sets: a GROUPING() flag of 1 means that column was
   // rolled up, so the rows belonging to a set are the ones with their own flag
   // at 0, and the grand total is the row where every flag is 1.
-  const revenueByDay = rollup
-    .filter((r) => r.g_bday === 0 && r.bday != null)
-    .map((r) => ({ date: dateKey(r.bday as Date), revenue: Number(r.revenue) }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+  //
+  // Revenue-by-day merges walk-in/takeaway with delivery (net) into ONE
+  // figure per day — a day with only delivery orders still needs its own bar,
+  // so this starts from a map rather than assuming every date already has a
+  // walk-in entry to add onto.
+  const revenueByDayMap = new Map<string, number>();
+  for (const r of rollup) {
+    if (r.g_bday === 0 && r.bday != null) {
+      revenueByDayMap.set(dateKey(r.bday), Number(r.revenue));
+    }
+  }
+  for (const r of deliveryRollup) {
+    if (r.g_bday === 0 && r.bday != null) {
+      const key = dateKey(r.bday);
+      revenueByDayMap.set(key, (revenueByDayMap.get(key) ?? 0) + Number(r.revenue));
+    }
+  }
+  const revenueByDay = Array.from(revenueByDayMap, ([date, revenue]) => ({ date, revenue })).sort(
+    (a, b) => a.date.localeCompare(b.date)
+  );
 
   const hourCounts = new Map<number, number>();
   for (const r of rollup) {
@@ -145,8 +191,14 @@ export async function GET(req: Request) {
   }
 
   const grand = rollup.find((r) => r.g_bday === 1 && r.g_hr === 1 && r.g_pm === 1);
-  const totalOrders = grand ? Number(grand.cnt) : 0;
-  const totalRevenue = grand ? Number(grand.revenue) : 0;
+  const deliveryGrand = deliveryRollup.find((r) => r.g_bday === 1);
+  // "The whole day's" revenue: cash + FIB + POS (walk-in/takeaway) plus
+  // delivery at NET — the commission Toters/Talabat keep is excluded, since
+  // that money never reaches the business. Orders count folds in delivery
+  // orders too, so avgOrderValue stays a true per-order average rather than
+  // being inflated by revenue whose orders aren't counted.
+  const totalOrders = (grand ? Number(grand.cnt) : 0) + (deliveryGrand ? Number(deliveryGrand.cnt) : 0);
+  const totalRevenue = (grand ? Number(grand.revenue) : 0) + (deliveryGrand ? Number(deliveryGrand.revenue) : 0);
   const avgOrderValue = totalOrders ? Math.round(totalRevenue / totalOrders) : 0;
 
   const avgDuration = timing[0]?.avg_dur;

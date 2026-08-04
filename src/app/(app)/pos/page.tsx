@@ -271,6 +271,20 @@ export default function CashierPage() {
     }
   }
 
+  // Same rule as walk-in orders: cancellable only while still "pending" (not
+  // yet marked ready) — enforced server-side too, this is not just a hidden button.
+  async function cancelDelivery(order: DeliveryOrder) {
+    const label = order.reference || order.platformName;
+    if (!confirm(t("cashier.confirm.cancelOrder", { label }))) return;
+    try {
+      await apiSend(`/api/delivery-orders/${order.id}/cancel`, "PATCH");
+      toast.show(t("cashier.toast.orderCancelled"));
+      pos.refreshActive();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : t("common.failed"), "error");
+    }
+  }
+
   if (pos.menuLoading) return <Loading />;
   if (pos.menuError) return <ErrorState message={pos.menuError} onRetry={() => pos.syncNow()} />;
 
@@ -415,6 +429,7 @@ export default function CashierPage() {
             onCancel={cancelOrder}
             onMarkPaid={markPaid}
             onDelivery={deliveryAction}
+            onCancelDelivery={cancelDelivery}
             onResolveConflict={pos.resolveConflict}
             onDiscard={pos.discard}
           />
@@ -886,6 +901,7 @@ function ActiveOrders({
   onCancel,
   onMarkPaid,
   onDelivery,
+  onCancelDelivery,
   onResolveConflict,
   onDiscard,
 }: {
@@ -899,6 +915,7 @@ function ActiveOrders({
   onCancel: (o: Order) => void;
   onMarkPaid: (o: Order) => void;
   onDelivery: (o: DeliveryOrder, action: "ready" | "driver_arrived" | "collected") => void;
+  onCancelDelivery: (o: DeliveryOrder) => void;
   onResolveConflict: (clientId: string, newPager: number) => void;
   onDiscard: (clientId: string) => void;
 }) {
@@ -1049,6 +1066,15 @@ function ActiveOrders({
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
+                  {o.status === "pending" && (
+                    <button
+                      onClick={() => onCancelDelivery(o)}
+                      className="btn-ghost size-7 rounded-lg text-red-500"
+                      title={t("cashier.activeOrders.cancelOrder")}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
                   <span
                     className="chip text-white text-[11px]"
                     style={{ backgroundColor: deliveryColor }}
