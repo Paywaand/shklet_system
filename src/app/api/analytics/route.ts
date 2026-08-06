@@ -6,9 +6,8 @@ import { activeBranchId, resolveBranchFilter } from "@/lib/branchScope";
 import { MIN_PREP_SECONDS, MAX_PREP_SECONDS } from "@/lib/prepTime";
 import { SYSTEM_TIME_ZONE } from "@/lib/format";
 import { getBusinessHours } from "@/lib/businessHours";
-import { getBusinessDayBounds, currentBusinessDay } from "@/lib/businessDay";
 import { businessDayExpr, localHourExpr, dateKey } from "@/lib/reportingSql";
-import { orderScopeSql, orderScopeWhere } from "@/lib/orderScope";
+import { orderScopeSql } from "@/lib/orderScope";
 
 // GET /api/analytics?from=ISO&to=ISO
 //
@@ -71,19 +70,6 @@ export async function GET(req: Request) {
   `;
   const deliveryBday = businessDayExpr(Prisma.sql`d."placedAt"`, businessHours, SYSTEM_TIME_ZONE);
 
-  // Fixed "today" snapshot (item: Orders/Cash/FIB/POS boxes) — always today's
-  // business day, independent of the page's selected date range, so the admin
-  // can compare "the period I'm looking at" against "what's happened today".
-  const todayBounds = getBusinessDayBounds(currentBusinessDay(new Date(), businessHours), businessHours);
-  const todayWhere = orderScopeWhere({
-    branch,
-    branchId: url.searchParams.get("branchId"),
-    eventId: url.searchParams.get("eventId"),
-    gte: todayBounds.start,
-    lte: todayBounds.end,
-    excludeCancelled: true,
-  });
-
   // One scan, four rollups. GROUPING SETS yields revenue-by-business-day,
   // orders-by-hour, the payment split and the grand total from a single pass;
   // the GROUPING() flags say which rollup each row belongs to.
@@ -100,7 +86,7 @@ export async function GET(req: Request) {
 
   type DeliveryRollupRow = { g_bday: number; bday: Date | null; cnt: bigint; revenue: bigint };
 
-  const [rollup, timing, slowest, topItems, deliveryRollup, todayByPaymentAgg] = await Promise.all([
+  const [rollup, timing, slowest, topItems, deliveryRollup] = await Promise.all([
     prisma.$queryRaw<RollupRow[]>`
       WITH src AS (
         SELECT ${bday} AS bday, ${hour} AS hr, o."paymentMethod" AS pm, o."total" AS total
@@ -161,12 +147,6 @@ export async function GET(req: Request) {
       FROM dsrc
       GROUP BY GROUPING SETS ((bday), ())
     `,
-    prisma.order.groupBy({
-      by: ["paymentMethod"],
-      where: todayWhere,
-      _sum: { total: true },
-      _count: true,
-    }),
   ]);
 
   // Unpack the grouping sets: a GROUPING() flag of 1 means that column was
@@ -205,9 +185,15 @@ export async function GET(req: Request) {
   const busiestHour = busiest.count > 0 ? busiest.hour : null;
 
   const paymentSplit = { cash: 0, card: 0, pos: 0 };
+  // Revenue (not just count) per payment method, for the SAME selected range as
+  // everything else on this response — this is what the Cash/FIB/POS boxes read.
+  const revenueByMethod = { cash: 0, card: 0, pos: 0 };
+  let ordersByMethod = 0;
   for (const r of rollup) {
     if (r.g_pm === 0 && r.pm && r.pm in paymentSplit) {
       paymentSplit[r.pm as keyof typeof paymentSplit] = Number(r.cnt);
+      revenueByMethod[r.pm as keyof typeof revenueByMethod] = Number(r.revenue);
+      ordersByMethod += Number(r.cnt);
     }
   }
 
@@ -225,18 +211,16 @@ export async function GET(req: Request) {
   const avgDuration = timing[0]?.avg_dur;
   const avgDurationSeconds = avgDuration != null ? Math.round(avgDuration) : null;
 
-  // Fixed "today" snapshot — Orders/Cash/FIB/POS, always today's business day
-  // regardless of the selected range (see todayWhere above).
-  const todayByMethod = { cash: 0, card: 0, pos: 0 };
-  let todayOrders = 0;
-  for (const g of todayByPaymentAgg) {
-    if (g.paymentMethod in todayByMethod) todayByMethod[g.paymentMethod as keyof typeof todayByMethod] = g._sum.total ?? 0;
-    todayOrders += g._count;
-  }
-
   return NextResponse.json({
     summary: { totalOrders, totalRevenue, avgOrderValue, busiestHour },
-    today: { orders: todayOrders, cash: todayByMethod.cash, fib: todayByMethod.card, pos: todayByMethod.pos },
+    // Cash/FIB/POS revenue for the SAME selected range as the rest of this
+    // response — moves with the page's date filter, not fixed to "today".
+    byPaymentMethod: {
+      orders: ordersByMethod,
+      cash: revenueByMethod.cash,
+      fib: revenueByMethod.card,
+      pos: revenueByMethod.pos,
+    },
     timing: {
       avgDurationSeconds,
       slowest: slowest[0]

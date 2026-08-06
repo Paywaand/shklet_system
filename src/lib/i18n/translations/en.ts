@@ -199,10 +199,10 @@ export const en: Dict = {
       slowestOrder: "Slowest order",
     },
     today: {
-      orders: "Orders today",
-      cash: "Cash today",
-      fib: "FIB today",
-      pos: "POS today",
+      orders: "Orders",
+      cash: "Cash",
+      fib: "FIB",
+      pos: "POS",
     },
     charts: {
       revenueByDay: "Revenue by day",

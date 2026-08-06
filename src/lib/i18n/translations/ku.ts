@@ -199,10 +199,10 @@ export const ku: Dict = {
       slowestOrder: "خاوترین داواکاری",
     },
     today: {
-      orders: "داواکارییەکانی ئەمڕۆ",
-      cash: "کاشی ئەمڕۆ",
-      fib: "FIB ی ئەمڕۆ",
-      pos: "POS ی ئەمڕۆ",
+      orders: "داواکارییەکان",
+      cash: "کاش",
+      fib: "FIB",
+      pos: "POS",
     },
     charts: {
       revenueByDay: "داهات بەپێی ڕۆژ",

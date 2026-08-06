@@ -39,8 +39,8 @@ type Analytics = {
   topItems: { name: string; qty: number; revenue: number }[];
   ordersByHour: { hour: number; count: number }[];
   paymentSplit: { cash: number; card: number; pos: number };
-  // Fixed "today" snapshot, independent of the page's selected range.
-  today: { orders: number; cash: number; fib: number; pos: number };
+  // Cash/FIB/POS revenue for the SAME selected range as the rest of this page.
+  byPaymentMethod: { orders: number; cash: number; fib: number; pos: number };
 };
 
 // The order history is fetched separately and paginated — it used to ride along
@@ -309,7 +309,7 @@ export default function AnalyticsPage() {
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (!data) return null;
 
-  const { summary, timing, revenueByDay, topItems, ordersByHour, paymentSplit, today } = data;
+  const { summary, timing, revenueByDay, topItems, ordersByHour, paymentSplit, byPaymentMethod } = data;
   // Colors are assigned per payment method explicitly, not by position — with
   // positional CHART_COLORS[i], the FIB slice's color depended on which OTHER
   // segments happened to be zero (and get filtered out) that day.
@@ -386,13 +386,14 @@ export default function AnalyticsPage() {
         />
       </div>
 
-      {/* Fixed "today" snapshot — always today's business day, regardless of
-          the range selected above (see /api/analytics's `today` field). */}
+      {/* Cash/FIB/POS revenue for the SAME selected range as the rest of the
+          page (see /api/analytics's `byPaymentMethod` field) — moves with the
+          date filter above, not fixed to today. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-        <Stat label={t("sales.today.orders")} value={num(today.orders)} />
-        <Stat label={t("sales.today.cash")} value={iqd(today.cash)} accent />
-        <Stat label={t("sales.today.fib")} value={iqd(today.fib)} />
-        <Stat label={t("sales.today.pos")} value={iqd(today.pos)} />
+        <Stat label={t("sales.today.orders")} value={num(byPaymentMethod.orders)} />
+        <Stat label={t("sales.today.cash")} value={iqd(byPaymentMethod.cash)} accent />
+        <Stat label={t("sales.today.fib")} value={iqd(byPaymentMethod.fib)} />
+        <Stat label={t("sales.today.pos")} value={iqd(byPaymentMethod.pos)} />
       </div>
 
       {adjustModalOpen && (
