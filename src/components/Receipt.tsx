@@ -31,6 +31,10 @@ export type ReceiptLine = {
 
 export type ReceiptData = {
   pagerNumber: number | null;
+  // Human-facing order code (e.g. "26-ELACV"), printed near the top next to the
+  // pager/driver-ref. null only for a walk-in order queued offline that hasn't
+  // synced yet (no server-assigned code) — see pos/page.tsx.
+  shortId?: string | null;
   placedAt: string | Date;
   orderType: "walk_in" | "takeaway" | "delivery";
   paymentMethod: string;
@@ -101,7 +105,10 @@ export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => v
           {data.pagerNumber != null ? (
             <div className="r-big">
               <div className="r-big-label">{data.pagerNumber}</div>
-              <div className="r-ref">{t("receipt.pager")}</div>
+              <div className="r-ref">
+                {t("receipt.pager")}
+                {data.shortId && <span className="r-order-code"> · {data.shortId}</span>}
+              </div>
             </div>
           ) : (
             isDelivery &&
@@ -110,7 +117,10 @@ export function Receipt({ data, onClose }: { data: ReceiptData; onClose: () => v
                 <div className="r-big-label">
                   <bdi>{data.reference}</bdi>
                 </div>
-                <div className="r-ref">{t("cashier.cart.driverRefLabel")}</div>
+                <div className="r-ref">
+                  {t("cashier.cart.driverRefLabel")}
+                  {data.shortId && <span className="r-order-code"> · {data.shortId}</span>}
+                </div>
               </div>
             )
           )}

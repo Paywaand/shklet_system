@@ -10,7 +10,8 @@ import { Prisma } from "@prisma/client";
 
 export type OrderScope = {
   // City scope — always applied, never caller-controlled (see lib/branchScope).
-  branch: string;
+  // An array means "combined" mode (admin-only, all cities summed together).
+  branch: string | string[];
   // Physical branch selector from the query string: null/"all" spans the city.
   branchId?: string | null;
   // Event selector: null/"all" = every order, "main" = the branch itself
@@ -34,7 +35,9 @@ export function orderScopeSql(scope: OrderScope): Prisma.Sql {
   // `AT TIME ZONE 'UTC'` cast forces the comparison to the naive-UTC wall
   // time the column actually stores, regardless of session timezone.
   const conds: Prisma.Sql[] = [
-    Prisma.sql`o."branch" = ${scope.branch}`,
+    Array.isArray(scope.branch)
+      ? Prisma.sql`o."branch" IN (${Prisma.join(scope.branch)})`
+      : Prisma.sql`o."branch" = ${scope.branch}`,
     Prisma.sql`o."placedAt" >= (${scope.gte}::timestamptz AT TIME ZONE 'UTC')`,
     Prisma.sql`o."placedAt" <= (${scope.lte}::timestamptz AT TIME ZONE 'UTC')`,
   ];
@@ -58,7 +61,7 @@ export function orderScopeSql(scope: OrderScope): Prisma.Sql {
 // rows (the paginated history table) rather than an aggregate.
 export function orderScopeWhere(scope: OrderScope): Prisma.OrderWhereInput {
   const where: Prisma.OrderWhereInput = {
-    branch: scope.branch,
+    branch: Array.isArray(scope.branch) ? { in: scope.branch } : scope.branch,
     placedAt: { gte: scope.gte, lte: scope.lte },
   };
   if (scope.branchId && scope.branchId !== "all") where.branchId = scope.branchId;

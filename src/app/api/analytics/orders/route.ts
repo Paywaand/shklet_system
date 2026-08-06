@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { authorize } from "@/lib/guard";
-import { activeBranch } from "@/lib/branchScope";
+import { resolveBranchFilter } from "@/lib/branchScope";
 import { orderScopeWhere } from "@/lib/orderScope";
 import { isPaymentMethod } from "@/lib/paymentMethods";
 
@@ -23,9 +23,8 @@ const DEFAULT_PAGE_SIZE = 50;
 export async function GET(req: Request) {
   const guard = await authorize("analytics.view");
   if (!guard.ok) return guard.response;
-  const branch = await activeBranch(guard.session);
-
   const url = new URL(req.url);
+  const branch = await resolveBranchFilter(guard.session, url.searchParams.get("branch") === "all");
   const from = url.searchParams.get("from");
   const to = url.searchParams.get("to");
   if (!from || !to) {

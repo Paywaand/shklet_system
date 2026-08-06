@@ -89,9 +89,11 @@ async function computeCashState(branch: Branch, branchId: string): Promise<CashS
       where: { branch, paymentMethod: "cash", placedAt: { gte, lte }, status: { not: "cancelled" } },
       _sum: { total: true },
     }),
+    // Only CASH-paid expenses draw down cash — an FIB-paid expense drew down
+    // the FIB ledger instead (see Expense.paymentMethod).
     prisma.expense.groupBy({
       by: ["source"],
-      where: { branch, date: { gte, lte } },
+      where: { branch, date: { gte, lte }, paymentMethod: "cash" },
       _sum: { amount: true },
     }),
   ]);

@@ -40,17 +40,19 @@ model User {
   createdAt DateTime  @default(now())
   lastLogin DateTime?
 
-  orders          Order[]
-  stockMovements  StockMovement[]
-  auditLogs       AuditLog[]
-  expenses        Expense[]
-  deliveryOrders  DeliveryOrder[]
-  dailyNeedsLogs  DailyNeedsLog[]
+  orders             Order[]
+  stockMovements     StockMovement[]
+  auditLogs          AuditLog[]
+  expenses           Expense[]
+  deliveryOrders     DeliveryOrder[]
+  dailyNeedsLogs     DailyNeedsLog[]
   safeEntries        SafeEntry[]
   withdrawals        CashWithdrawal[]
   cashAdjustments    CashAdjustment[]
   moneyLedgerEntries MoneyLedgerEntry[]
   sessions           Session[]
+  loyaltyRedemptions LoyaltyRedemption[]
+  revenueAdjustments RevenueAdjustment[]
 
   @@index([branchId])
 }
@@ -124,41 +126,57 @@ model MenuItem {
 
 // ----------------------- Orders -----------------------
 model Order {
-  id              String      @id @default(cuid())
+  id                String             @id @default(cuid())
   // Human-facing order code: random 5-char uppercase alphanumeric (no ambiguous
   // 0/O/1/I). Generated + collision-checked at creation. The cuid `id` stays the
   // FK; `shortId` is what's shown on receipts, history, the queue, and dialogs.
-  shortId         String?     @unique
+  shortId           String?            @unique
   // Client-generated UUID for offline idempotency. The cashier tablet generates this
   // when an order is created (online or queued offline) and sends it with POST. If a
   // retry arrives after the row already exists (network dropped before the response),
   // the server returns the existing order instead of creating a duplicate.
-  clientId        String?     @unique
-  branch          String      @default("suli") // "suli" | "erbil" (city — kept for existing city-scoped queries)
+  clientId          String?            @unique
+  branch            String             @default("suli") // "suli" | "erbil" (city — kept for existing city-scoped queries)
   // Physical branch this order was placed at (see Branch model).
-  branchId        String
-  branchRef       Branch      @relation(fields: [branchId], references: [id])
-  pagerNumber     Int
-  total           Int
-  paymentMethod   String // cash | card
-  orderType       String      @default("walk_in") // walk_in | takeaway — NOT delivery; platform orders stay in DeliveryOrder
-  isPaid          Boolean     @default(true) // false = paid later; not used by DeliveryOrder
-  status          String      @default("pending") // pending | ready | collected
-  placedAt        DateTime    @default(now())
-  readyAt         DateTime?
-  collectedAt     DateTime?
-  durationSeconds Int?
-  staffId         String?
-  staff           User?       @relation(fields: [staffId], references: [id])
-  eventId         String? // null = the branch itself (no event)
-  event           Event?      @relation(fields: [eventId], references: [id])
-  items           OrderItem[]
+  branchId          String
+  branchRef         Branch             @relation(fields: [branchId], references: [id])
+  pagerNumber       Int
+  total             Int
+  paymentMethod     String // cash | card
+  orderType         String             @default("walk_in") // walk_in | takeaway — NOT delivery; platform orders stay in DeliveryOrder
+  isPaid            Boolean            @default(true) // false = paid later; not used by DeliveryOrder
+  status            String             @default("pending") // pending | ready | collected
+  placedAt          DateTime           @default(now())
+  readyAt           DateTime?
+  collectedAt       DateTime?
+  durationSeconds   Int?
+  staffId           String?
+  staff             User?              @relation(fields: [staffId], references: [id])
+  eventId           String? // null = the branch itself (no event)
+  event             Event?             @relation(fields: [eventId], references: [id])
+  items             OrderItem[]
+  // ----------------------- Loyalty (optional) + ad-hoc discount -----------------------
+  // Phone number entered by the cashier at checkout, used purely as a loyalty key — never
+  // required, never a full customer account. `customerId` links to the upserted Customer
+  // row; `customerPhone` stays a snapshot on the order so history reads correctly even if
+  // the Customer row is later edited. `discountPct` is set ONLY when the cashier typed a
+  // percentage-based ad-hoc discount at checkout (see the "i" button on the cart — this is
+  // NOT tied to the customer/phone, just a manual entry for that one order); a flat-IQD
+  // ad-hoc discount leaves `discountPct` null. `discountAmount` is the total IQD knocked
+  // off `total` by the ad-hoc discount and/or a redeemed loyalty free item, for audit.
+  customerId        String?
+  customer          Customer?          @relation(fields: [customerId], references: [id])
+  customerPhone     String?
+  discountPct       Int?
+  discountAmount    Int                @default(0)
+  loyaltyRedemption LoyaltyRedemption?
 
   @@index([placedAt])
   @@index([status])
   @@index([eventId])
   @@index([branch])
   @@index([branchId])
+  @@index([customerId])
   // Reporting reads always filter city + date range together (Sales overview,
   // monthly CSV, profit). Without these composites Postgres bitmap-ands two
   // single-column indexes, or falls back to a seq scan on wide ranges.
@@ -247,20 +265,30 @@ model StockMovement {
 
 // ----------------------- Expenses -----------------------
 model Expense {
-  id          String   @id @default(cuid())
-  date        DateTime @default(now())
-  branch      String   @default("suli") // "suli" | "erbil"
-  category    String // Rent | Utilities | Supplies | Staff | Other
-  description String?
-  amount      Int // IQD
-  // Where the cash came from: "manager" (default) or "safe". Admin-only choice on
-  // the expense form; safe-sourced expenses draw down the safe balance.
-  source      String   @default("manager")
-  createdById String?
-  createdBy   User?    @relation(fields: [createdById], references: [id])
-  eventId     String? // "Linked to": null = the branch itself
-  event       Event?   @relation(fields: [eventId], references: [id])
-  createdAt   DateTime @default(now())
+  id            String            @id @default(cuid())
+  date          DateTime          @default(now())
+  branch        String            @default("suli") // "suli" | "erbil"
+  category      String // Rent | Utilities | Supplies | Staff | Other
+  description   String?
+  amount        Int // IQD
+  // How this expense was paid: "cash" (default, drawn from the manager/safe cash pool
+  // per `source` below) or "fib" (drawn straight from the branch's FIB running balance
+  // via a linked MoneyLedgerEntry settlement — see `ledgerEntry`). POS-terminal card
+  // revenue sits in a settlement/bank account that can't be spent from directly, so
+  // "fib" is the only non-cash funding source that makes sense here.
+  paymentMethod String            @default("cash")
+  // Where the CASH came from: "manager" (default) or "safe". Only meaningful when
+  // paymentMethod is "cash" — admin-only choice on the expense form; safe-sourced
+  // expenses draw down the safe balance.
+  source        String            @default("manager")
+  createdById   String?
+  createdBy     User?             @relation(fields: [createdById], references: [id])
+  eventId       String? // "Linked to": null = the branch itself
+  event         Event?            @relation(fields: [eventId], references: [id])
+  createdAt     DateTime          @default(now())
+  // Set only when paymentMethod is "fib" — the FIB-bucket settlement entry this
+  // expense created, kept 1:1 so editing/deleting the expense keeps the ledger in sync.
+  ledgerEntry   MoneyLedgerEntry?
 
   @@index([date])
   @@index([eventId])
@@ -347,6 +375,9 @@ model DeliverySettings {
 // order time, so changing the commission later never rewrites history.
 model DeliveryOrder {
   id              String              @id @default(cuid())
+  // Human-facing order code, same format/generator as Order.shortId (e.g.
+  // "26-A3F9K"), printed on the kitchen ticket next to the platform reference.
+  shortId         String?             @unique
   branch          String              @default("suli") // "suli" | "erbil"
   platformName    String              @default("Toters") // snapshot
   commissionPct   Float               @default(20) // snapshot
@@ -363,10 +394,15 @@ model DeliveryOrder {
   staffId         String?
   staff           User?               @relation(fields: [staffId], references: [id])
   items           DeliveryOrderItem[]
+  // Soft-delete (manager/admin): keeps the row for the audit trail instead of a hard
+  // delete, and excludes it from every revenue/ledger aggregate. Who/when/original
+  // amount is on the matching AuditLog entry, not duplicated here.
+  deletedAt       DateTime?
 
   @@index([placedAt])
   @@index([status])
   @@index([branch])
+  @@index([deletedAt])
 }
 
 model DeliveryOrderItem {
@@ -505,8 +541,65 @@ model MoneyLedgerEntry {
   createdById String?
   createdBy   User?    @relation(fields: [createdById], references: [id])
   createdAt   DateTime @default(now())
+  // Set when this settlement was created BY an FIB-paid expense (see Expense.paymentMethod),
+  // so editing/deleting that expense can keep this row in sync instead of drifting apart.
+  expenseId   String?  @unique
+  expense     Expense? @relation(fields: [expenseId], references: [id], onDelete: Cascade)
 
   @@index([branch, bucket])
   @@index([date])
 }
 
+// ----------------------- Loyalty program (buy 9, get a free Shklet Special) -----------------------
+// Identity is a bare phone number — no accounts, no login, no email (this system has
+// none). Entered once, optionally, at checkout; used purely as a loyalty key. Progress
+// is tracked ACROSS both branches (one counter per phone), per product decision.
+// Identity is a bare phone number; the ONLY thing tracked here is loyalty
+// progress toward the free 9th-item Shklet Special. Per-order discounts are a
+// separate, ad-hoc thing the cashier types in at checkout (see Order.discountPct/
+// discountAmount) — not a per-customer setting stored on this row.
+model Customer {
+  id           String              @id @default(cuid())
+  phone        String              @unique // normalized digits-only
+  loyaltyCount Int                 @default(0) // qualifying items purchased since the last redemption
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  orders       Order[]
+  redemptions  LoyaltyRedemption[]
+
+  @@index([phone])
+}
+
+// One row per free-item redemption, for audit — who redeemed, on which order, when.
+model LoyaltyRedemption {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  orderId    String   @unique
+  order      Order    @relation(fields: [orderId], references: [id])
+  branch     String // "suli" | "erbil" (city)
+  staffId    String?
+  staff      User?    @relation(fields: [staffId], references: [id])
+  redeemedAt DateTime @default(now())
+
+  @@index([customerId])
+  @@index([branch])
+}
+
+// ----------------------- Manual revenue adjustment (Sales page, per-branch/day) -----------------------
+// Lets a manager/admin correct the day's DISPLAYED revenue total when the system total
+// and the actual counted total don't match (till short/over) — without touching any
+// underlying Order row. Always signed + reasoned + attributed, same audit-trail
+// principle as every other correction in this file (CashAdjustment, MoneyLedgerEntry).
+model RevenueAdjustment {
+  id          String   @id @default(cuid())
+  branch      String // "suli" | "erbil" (city)
+  date        DateTime // the business day this adjustment corrects
+  amount      Int // IQD, signed (+/-)
+  reason      String // required
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([branch, date])
+}

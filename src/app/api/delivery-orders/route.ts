@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { authorize, audit } from "@/lib/guard";
 import { activeBranch } from "@/lib/branchScope";
 import { getDeliverySettings } from "@/lib/delivery";
+import { generateUniqueDeliveryOrderShortId } from "@/lib/shortId";
 
 // POST /api/delivery-orders — place a delivery-platform order (any cashier).
 // The branch's platform name + commission % are snapshotted onto the order so
@@ -32,8 +33,11 @@ export async function POST(req: Request) {
   );
   const netTotal = Math.round(grossTotal * (1 - settings.commissionPct / 100));
 
+  const shortId = await generateUniqueDeliveryOrderShortId(prisma);
+
   const order = await prisma.deliveryOrder.create({
     data: {
+      shortId,
       branch,
       platformName: settings.platformName,
       commissionPct: settings.commissionPct,

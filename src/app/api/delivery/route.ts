@@ -21,6 +21,8 @@ export async function GET(req: Request) {
   const lte = to ? new Date(to) : undefined;
 
   const [orders, allForMonthly] = await Promise.all([
+    // Voided orders stay in this list (tagged in the UI) so they're reviewable —
+    // they're excluded from every SUM below instead, never from the listing itself.
     prisma.deliveryOrder.findMany({
       where: { branch, placedAt: { gte, lte } },
       orderBy: { placedAt: "desc" },
@@ -28,20 +30,21 @@ export async function GET(req: Request) {
     }),
     // Monthly breakdown spans all time, independent of the date filter.
     prisma.deliveryOrder.findMany({
-      where: { branch },
+      where: { branch, deletedAt: null },
       select: { placedAt: true, grossTotal: true, netTotal: true },
     }),
   ]);
 
-  const gross = orders.reduce((s, o) => s + o.grossTotal, 0);
-  const net = orders.reduce((s, o) => s + o.netTotal, 0);
+  const activeOrders = orders.filter((o) => !o.deletedAt);
+  const gross = activeOrders.reduce((s, o) => s + o.grossTotal, 0);
+  const net = activeOrders.reduce((s, o) => s + o.netTotal, 0);
   const commission = gross - net;
 
   // Timing averages (only where the relevant timestamps exist). Prep average
   // excludes "instant" items (prepSeconds < 30, e.g. water) so they don't skew
   // it; arrival time is a separate driver metric and keeps every order.
-  const prep = orders.filter((o) => countsTowardPrepAvg(o.prepSeconds));
-  const arrive = orders.filter((o) => o.arriveSeconds != null);
+  const prep = activeOrders.filter((o) => countsTowardPrepAvg(o.prepSeconds));
+  const arrive = activeOrders.filter((o) => o.arriveSeconds != null);
   const avgPrepSeconds = prep.length
     ? Math.round(prep.reduce((s, o) => s + (o.prepSeconds || 0), 0) / prep.length)
     : null;
@@ -65,7 +68,7 @@ export async function GET(req: Request) {
 
   return NextResponse.json({
     platform: settings,
-    summary: { gross, commission, net, orderCount: orders.length, avgPrepSeconds, avgArriveSeconds },
+    summary: { gross, commission, net, orderCount: activeOrders.length, avgPrepSeconds, avgArriveSeconds },
     orders,
     monthly,
   });

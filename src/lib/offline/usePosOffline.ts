@@ -79,8 +79,10 @@ function createOpToOrder(op: Extract<OutboxOp, { kind: "create" }>): Order {
 // `order` is present only when the create round-tripped to the server (i.e.
 // !queued). A queued offline order has no server-assigned code yet, so a
 // receipt printed for it shows the pager number and omits the order code.
+// `loyaltyStatus` rides along on a successful, non-queued create — the
+// cashier-prompt trigger for "this customer just unlocked a free item".
 export type PlaceResult =
-  | { ok: true; queued: boolean; order?: Order }
+  | { ok: true; queued: boolean; order?: Order; loyaltyStatus?: { justQualified: boolean; phone: string | null } }
   | { ok: false; error: string };
 
 // branchId: "" = main branch, otherwise an event id. Determines which
@@ -198,10 +200,13 @@ export function usePosOffline(branchId: string = "") {
       };
 
       if (online) {
-        const res = await sendJson<{ order: Order }>("/api/orders", "POST", { clientId, ...payload });
+        const res = await sendJson<{
+          order: Order;
+          loyaltyStatus?: { justQualified: boolean; phone: string | null };
+        }>("/api/orders", "POST", { clientId, ...payload });
         if (res.ok) {
           await loadActive();
-          return { ok: true, queued: false, order: res.data?.order };
+          return { ok: true, queued: false, order: res.data?.order, loyaltyStatus: res.data?.loyaltyStatus };
         }
         if (res.kind === "http") return { ok: false, error: res.error };
         // network error → fall through and queue

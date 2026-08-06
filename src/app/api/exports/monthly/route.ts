@@ -159,7 +159,7 @@ export async function GET(req: Request) {
   // delivery — gross vs net both matter: the platform keeps commissionPct, so
   // net is what actually lands in the business account.
   const deliveries = await prisma.deliveryOrder.findMany({
-    where: { branch, placedAt: { gte, lte } },
+    where: { branch, placedAt: { gte, lte }, deletedAt: null },
     orderBy: { placedAt: "asc" },
     include: { staff: { select: { fullName: true } } },
   });

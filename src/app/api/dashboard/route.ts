@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authorize } from "@/lib/guard";
-import { activeBranch, activeBranchId } from "@/lib/branchScope";
+import { activeBranchId, resolveBranchFilter } from "@/lib/branchScope";
 import { getBusinessHours } from "@/lib/businessHours";
 import { getBusinessDayBounds, currentBusinessDay } from "@/lib/businessDay";
 import { monthRange } from "@/lib/cash";
@@ -16,7 +16,7 @@ const TREND_MONTHS = 6;
 
 // Revenue + expenses for one month range — shared by "this month", "last
 // month", and "same month last year" so the three figures use identical logic.
-async function monthTotals(branch: string, range: { gte: Date; lte: Date }) {
+async function monthTotals(branch: string | { in: string[] }, range: { gte: Date; lte: Date }) {
   const [orders, expenses] = await Promise.all([
     prisma.order.aggregate({
       where: { branch, placedAt: { gte: range.gte, lte: range.lte }, status: { not: "cancelled" } },
@@ -45,22 +45,40 @@ function pctChange(from: number, to: number): number | null {
 // re-runs the same scoped queries with the same helpers used there
 // (businessDay bounds, computeExpectedCashOnHand) so the numbers can never
 // drift from what Sales/Profit/Cash Tracking show for the same period.
-export async function GET() {
+export async function GET(req: Request) {
   const guard = await authorize();
   if (!guard.ok) return guard.response;
   if (guard.session.role !== "admin") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  const branch = await activeBranch(guard.session);
+  const url = new URL(req.url);
+  const branchArg = await resolveBranchFilter(guard.session, url.searchParams.get("branch") === "all");
+  const branch: string | { in: string[] } = Array.isArray(branchArg) ? { in: branchArg } : branchArg;
   const branchId = await activeBranchId(guard.session);
   const businessHours = await getBusinessHours(branchId);
 
+  // Month selector — "YYYY-MM", defaults to the current calendar month. Every
+  // "month"/MoM/YoY/trend figure below is relative to THIS month, not
+  // necessarily today's real month, so browsing an older month shows that
+  // month's own comparisons.
+  const monthParam = url.searchParams.get("month");
+  const selectedMonth =
+    monthParam && /^\d{4}-\d{2}$/.test(monthParam)
+      ? new Date(Number(monthParam.slice(0, 4)), Number(monthParam.slice(5, 7)) - 1, 1)
+      : new Date();
+
   const today = currentBusinessDay(new Date(), businessHours);
   const todayRange = getBusinessDayBounds(today, businessHours);
-  const monthRangeBounds = monthRange(new Date(), businessHours);
-  const lastMonthRangeBounds = monthRange(new Date(), businessHours, -1);
-  const sameMonthLastYearBounds = monthRange(new Date(), businessHours, -12);
-  const branchBaseline = await getCashBaseline(branch);
+  const monthRangeBounds = monthRange(selectedMonth, businessHours);
+  const lastMonthRangeBounds = monthRange(selectedMonth, businessHours, -1);
+  const sameMonthLastYearBounds = monthRange(selectedMonth, businessHours, -12);
+  const branches = Array.isArray(branchArg) ? branchArg : [branchArg];
+  const baselines = await Promise.all(branches.map((b) => getCashBaseline(b)));
+  // Combined mode: the EARLIEST of the cities' baselines — a combined figure
+  // can't apply one city's go-live cutoff to the other.
+  const branchBaseline = baselines.some((b) => b === null)
+    ? null
+    : baselines.reduce((min, b) => (b! < min! ? b : min), baselines[0]);
   // MoM/YoY need the COMPARISON period to be fully after go-live — otherwise
   // "last month"/"same month last year" would mix in pre-cutover data.
   const momAvailable = !branchBaseline || lastMonthRangeBounds.gte >= branchBaseline;
@@ -68,7 +86,7 @@ export async function GET() {
 
   const trendRanges = Array.from({ length: TREND_MONTHS }, (_, i) => {
     const offset = -(TREND_MONTHS - 1 - i); // oldest first: e.g. -5..0
-    return monthRange(new Date(), businessHours, offset);
+    return monthRange(selectedMonth, businessHours, offset);
   });
 
   const [
@@ -83,6 +101,11 @@ export async function GET() {
     sameMonthLastYearTotals,
     expensesByCategoryAgg,
     trendAgg,
+    deliveryToday,
+    deliveryMonth,
+    voidedDeliveryMonth,
+    revenueAdjustmentsMonth,
+    loyaltyRedemptionsMonth,
   ] = await Promise.all([
     prisma.order.aggregate({
       where: { branch, placedAt: { gte: todayRange.start, lte: todayRange.end }, status: { not: "cancelled" } },
@@ -118,7 +141,7 @@ export async function GET() {
       },
       _sum: { totalCost: true },
     }),
-    computeExpectedCashOnHand(branch, monthRangeBounds),
+    computeExpectedCashOnHand(branchArg, monthRangeBounds),
     prisma.inventoryItem.findMany({
       where: { branch },
       select: { name: true, quantity: true, unit: true, minThreshold: true },
@@ -139,6 +162,34 @@ export async function GET() {
         })
       )
     ),
+    // Delivery performance — absent from the dashboard until now despite being
+    // a full revenue stream (item 3).
+    prisma.deliveryOrder.aggregate({
+      where: { branch, placedAt: { gte: todayRange.start, lte: todayRange.end }, status: { not: "cancelled" }, deletedAt: null },
+      _sum: { grossTotal: true, netTotal: true },
+      _count: true,
+    }),
+    prisma.deliveryOrder.aggregate({
+      where: { branch, placedAt: { gte: monthRangeBounds.gte, lte: monthRangeBounds.lte }, status: { not: "cancelled" }, deletedAt: null },
+      _sum: { grossTotal: true, netTotal: true },
+      _count: true,
+    }),
+    // Corrections transparency (items 6 + 7): surfaced here so an admin notices
+    // voids/adjustments happened without having to dig through Delivery/Sales.
+    prisma.deliveryOrder.aggregate({
+      where: { branch, placedAt: { gte: monthRangeBounds.gte, lte: monthRangeBounds.lte }, deletedAt: { not: null } },
+      _sum: { grossTotal: true },
+      _count: true,
+    }),
+    prisma.revenueAdjustment.aggregate({
+      where: { branch, date: { gte: monthRangeBounds.gte, lte: monthRangeBounds.lte } },
+      _sum: { amount: true },
+      _count: true,
+    }),
+    // Loyalty (item 4): free-item redemptions this month, at a glance.
+    prisma.loyaltyRedemption.count({
+      where: { branch, redeemedAt: { gte: monthRangeBounds.gte, lte: monthRangeBounds.lte } },
+    }),
   ]);
 
   const totalSales = monthOrders._sum.total ?? 0;
@@ -165,6 +216,7 @@ export async function GET() {
   });
 
   return NextResponse.json({
+    selectedMonth: `${monthRangeBounds.gte.getFullYear()}-${String(monthRangeBounds.gte.getMonth() + 1).padStart(2, "0")}`,
     today: {
       orders: todayOrders._count,
       revenue: todayOrders._sum.total ?? 0,
@@ -188,6 +240,25 @@ export async function GET() {
       lastYear: sameMonthLastYearTotals,
       revenuePctChange: pctChange(sameMonthLastYearTotals.revenue, totalSales),
       expensesPctChange: pctChange(sameMonthLastYearTotals.expenses, totalExpenses),
+    },
+    delivery: {
+      today: {
+        orders: deliveryToday._count,
+        gross: deliveryToday._sum.grossTotal ?? 0,
+        net: deliveryToday._sum.netTotal ?? 0,
+      },
+      month: {
+        orders: deliveryMonth._count,
+        gross: deliveryMonth._sum.grossTotal ?? 0,
+        net: deliveryMonth._sum.netTotal ?? 0,
+      },
+    },
+    corrections: {
+      voidedDeliveryCount: voidedDeliveryMonth._count,
+      voidedDeliveryAmount: voidedDeliveryMonth._sum.grossTotal ?? 0,
+      revenueAdjustmentCount: revenueAdjustmentsMonth._count,
+      revenueAdjustmentNet: revenueAdjustmentsMonth._sum.amount ?? 0,
+      loyaltyRedemptions: loyaltyRedemptionsMonth,
     },
     expensesByCategory,
     expensesByCategoryTrend,

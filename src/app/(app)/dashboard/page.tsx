@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, BarChart3, TrendingUp, Wallet, Boxes, Receipt } from "lucide-react";
+import { AlertTriangle, BarChart3, TrendingUp, Wallet, Boxes, Receipt, Truck, Gift, Undo2 } from "lucide-react";
 import {
   ResponsiveContainer,
   BarChart,
@@ -35,11 +36,22 @@ type MonthComparison = {
   expensesPctChange: number | null;
 };
 
+type DeliveryTotals = { orders: number; gross: number; net: number };
+
 type DashboardData = {
+  selectedMonth: string;
   today: { orders: number; revenue: number; unpaidCount: number; unpaidAmount: number };
   month: { netProfit: number; expectedCashOnHand: number };
   mom: MonthComparison & { lastMonth: MonthTotals };
   yoy: MonthComparison & { lastYear: MonthTotals };
+  delivery: { today: DeliveryTotals; month: DeliveryTotals };
+  corrections: {
+    voidedDeliveryCount: number;
+    voidedDeliveryAmount: number;
+    revenueAdjustmentCount: number;
+    revenueAdjustmentNet: number;
+    loyaltyRedemptions: number;
+  };
   expensesByCategory: { category: string; amount: number }[];
   expensesByCategoryTrend: ({ month: string } & Record<string, number | string>)[];
   lowStock: {
@@ -57,8 +69,16 @@ export default function DashboardPage() {
   const { user } = useSession();
   const { t } = useLanguage();
   const isAdmin = user.role === "admin";
+  const [selectedMonth, setSelectedMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [allBranches, setAllBranches] = useState(false);
 
-  const { data, loading, error, reload } = useFetch<DashboardData>(isAdmin ? "/api/dashboard" : null);
+  const dashboardUrl = isAdmin
+    ? `/api/dashboard?${new URLSearchParams({
+        month: selectedMonth,
+        ...(allBranches ? { branch: "all" } : {}),
+      }).toString()}`
+    : null;
+  const { data, loading, error, reload } = useFetch<DashboardData>(dashboardUrl);
 
   if (!isAdmin) {
     return (
@@ -73,11 +93,29 @@ export default function DashboardPage() {
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (!data) return null;
 
-  const { today, month, mom, yoy, expensesByCategory, expensesByCategoryTrend, lowStock } = data;
+  const { today, month, mom, yoy, delivery, corrections, expensesByCategory, expensesByCategoryTrend, lowStock } =
+    data;
 
   return (
     <>
       <PageHeader title={t("dashboard.title")} subtitle={t("dashboard.subtitle")} />
+
+      <div className="flex flex-wrap items-center gap-2 mb-5">
+        <input
+          type="month"
+          aria-label={t("dashboard.monthSelector")}
+          className="input py-2 w-auto"
+          value={selectedMonth}
+          max={new Date().toISOString().slice(0, 7)}
+          onChange={(e) => setSelectedMonth(e.target.value)}
+        />
+        <button
+          onClick={() => setAllBranches(!allBranches)}
+          className={`btn px-4 py-2 text-sm ${allBranches ? "bg-cocoa text-white" : "bg-black/5 dark:bg-white/10"}`}
+        >
+          {t("sales.filters.allCities")}
+        </button>
+      </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         <Stat label={t("dashboard.todayOrders")} value={num(today.orders)} />
@@ -130,6 +168,8 @@ export default function DashboardPage() {
       )}
 
       <MomYoySection mom={mom} yoy={yoy} />
+      <DeliveryPerformanceSection delivery={delivery} />
+      <CorrectionsSection corrections={corrections} />
       <ExpensesByCategorySection byCategory={expensesByCategory} trend={expensesByCategoryTrend} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -137,6 +177,8 @@ export default function DashboardPage() {
         <QuickLink href="/profit" icon={<TrendingUp size={18} />} label="Profit" />
         <QuickLink href="/cash-tracking" icon={<Wallet size={18} />} label="Cash Tracking" />
         <QuickLink href="/expenses" icon={<Receipt size={18} />} label={t("nav.expenses")} />
+        <QuickLink href="/delivery" icon={<Truck size={18} />} label="Delivery" />
+        <QuickLink href="/loyalty" icon={<Gift size={18} />} label="Loyalty" />
       </div>
     </>
   );
@@ -220,6 +262,78 @@ function DeltaStat({
 }
 
 // ---- Expenses by category (current month) + trend over the last 6 months ----
+// ---- Delivery performance (item 3) — absent from the dashboard until now,
+// despite being a full revenue stream tracked separately from branch Orders. ----
+function DeliveryPerformanceSection({ delivery }: { delivery: DashboardData["delivery"] }) {
+  return (
+    <div className="card p-4 mb-5">
+      <div className="flex items-center gap-2 mb-3">
+        <Truck size={18} className="opacity-70" />
+        <h2 className="font-bold">Delivery performance</h2>
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        <div>
+          <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">Today</p>
+          <p className="text-lg font-extrabold mt-0.5">{iqd(delivery.today.net)}</p>
+          <p className="text-xs opacity-50">{num(delivery.today.orders)} orders</p>
+        </div>
+        <div>
+          <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">This month (net)</p>
+          <p className="text-lg font-extrabold mt-0.5">{iqd(delivery.month.net)}</p>
+          <p className="text-xs opacity-50">{num(delivery.month.orders)} orders</p>
+        </div>
+        <div>
+          <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">This month (gross)</p>
+          <p className="text-lg font-extrabold mt-0.5">{iqd(delivery.month.gross)}</p>
+          <p className="text-xs opacity-50">before commission</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Corrections & loyalty transparency (items 4, 6, 7) — surfaces voided
+// delivery orders, manual revenue adjustments, and loyalty redemptions so an
+// admin notices them without digging through Delivery/Sales/Loyalty. ----
+function CorrectionsSection({ corrections }: { corrections: DashboardData["corrections"] }) {
+  const hasAny =
+    corrections.voidedDeliveryCount > 0 || corrections.revenueAdjustmentCount > 0 || corrections.loyaltyRedemptions > 0;
+  if (!hasAny) return null;
+  return (
+    <div className="card p-4 mb-5">
+      <div className="flex items-center gap-2 mb-3">
+        <Undo2 size={18} className="opacity-70" />
+        <h2 className="font-bold">This month — corrections & loyalty</h2>
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        <div>
+          <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">Voided delivery orders</p>
+          <p className="text-lg font-extrabold mt-0.5">{num(corrections.voidedDeliveryCount)}</p>
+          {corrections.voidedDeliveryCount > 0 && (
+            <p className="text-xs opacity-50">{iqd(corrections.voidedDeliveryAmount)} excluded from revenue</p>
+          )}
+        </div>
+        <div>
+          <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">Revenue adjustments</p>
+          <p className="text-lg font-extrabold mt-0.5">{num(corrections.revenueAdjustmentCount)}</p>
+          {corrections.revenueAdjustmentCount > 0 && (
+            <p className="text-xs opacity-50">
+              net {corrections.revenueAdjustmentNet > 0 ? "+" : ""}
+              {iqd(corrections.revenueAdjustmentNet)}
+            </p>
+          )}
+        </div>
+        <div>
+          <p className="text-xs opacity-60 font-semibold uppercase tracking-wide flex items-center gap-1">
+            <Gift size={12} /> Loyalty redemptions
+          </p>
+          <p className="text-lg font-extrabold mt-0.5">{num(corrections.loyaltyRedemptions)}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ExpensesByCategorySection({
   byCategory,
   trend,

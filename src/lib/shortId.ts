@@ -46,3 +46,17 @@ export async function generateUniqueOrderShortId(prisma: PrismaClient): Promise<
   // Extremely unlikely fallback: append more entropy.
   return `${prefix}-${randomPart(8)}`;
 }
+
+// Same generator, checked against DeliveryOrder's own shortId column instead —
+// the two tables' codes are never cross-checked against each other, since each
+// is only ever looked up within its own table.
+export async function generateUniqueDeliveryOrderShortId(prisma: PrismaClient): Promise<string> {
+  const prefix = datePrefix();
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const length = DEFAULT_LENGTH + Math.floor(attempt / 5);
+    const candidate = `${prefix}-${randomPart(length)}`;
+    const existing = await prisma.deliveryOrder.findUnique({ where: { shortId: candidate } });
+    if (!existing) return candidate;
+  }
+  return `${prefix}-${randomPart(8)}`;
+}

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { authorize } from "@/lib/guard";
-import { activeBranch, activeBranchId } from "@/lib/branchScope";
+import { activeBranchId, resolveBranchFilter } from "@/lib/branchScope";
 import { monthRange } from "@/lib/cash";
 import { getBusinessHours } from "@/lib/businessHours";
 import { computeLedgerBalance, isMoneyLedgerBucket } from "@/lib/moneyLedger";
@@ -14,10 +14,10 @@ import { computeLedgerBalance, isMoneyLedgerBucket } from "@/lib/moneyLedger";
 export async function GET(req: Request) {
   const guard = await authorize("analytics.view");
   if (!guard.ok) return guard.response;
-  const branch = await activeBranch(guard.session);
   const branchId = await activeBranchId(guard.session);
 
   const url = new URL(req.url);
+  const branch = await resolveBranchFilter(guard.session, url.searchParams.get("branch") === "all");
   const bucket = url.searchParams.get("bucket");
   if (!isMoneyLedgerBucket(bucket))
     return NextResponse.json({ error: "Invalid bucket" }, { status: 400 });

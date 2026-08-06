@@ -30,7 +30,7 @@ export async function GET(req: Request) {
     // Active delivery-platform orders shown in the same operational queue
     // (separate table, per-city, since delivery stays city-scoped).
     prisma.deliveryOrder.findMany({
-      where: { branch, status: { in: ["pending", "ready", "driver_arrived"] } },
+      where: { branch, status: { in: ["pending", "ready", "driver_arrived"] }, deletedAt: null },
       orderBy: { placedAt: "asc" },
       include: { items: true, staff: { select: { fullName: true } } },
     }),

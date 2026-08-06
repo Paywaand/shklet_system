@@ -13,7 +13,7 @@ import {
   Cell,
   CartesianGrid,
 } from "recharts";
-import { ChevronLeft, ChevronRight, Download, Search, Trash2, Wallet } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Search, Trash2, Wallet, Plus, History } from "lucide-react";
 import { useFetch, apiSend } from "@/lib/client";
 import { iqd, num, duration, shortTime, shortDate } from "@/lib/format";
 import {
@@ -30,7 +30,7 @@ import { useToast } from "@/components/Toast";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { PageHeader } from "@/components/PageHeader";
 import { ChartCard } from "@/components/ChartCard";
-import { Loading, ErrorState, EmptyState } from "@/components/ui";
+import { Loading, ErrorState, EmptyState, Modal } from "@/components/ui";
 
 type Analytics = {
   summary: { totalOrders: number; totalRevenue: number; avgOrderValue: number; busiestHour: number | null };
@@ -39,6 +39,8 @@ type Analytics = {
   topItems: { name: string; qty: number; revenue: number }[];
   ordersByHour: { hour: number; count: number }[];
   paymentSplit: { cash: number; card: number; pos: number };
+  // Fixed "today" snapshot, independent of the page's selected range.
+  today: { orders: number; cash: number; fib: number; pos: number };
 };
 
 // The order history is fetched separately and paginated — it used to ride along
@@ -51,6 +53,16 @@ type OrderPage = {
   total: number;
   totalPages: number;
 };
+
+type RevenueAdjustment = {
+  id: string;
+  date: string;
+  amount: number;
+  reason: string;
+  createdBy?: { fullName: string } | null;
+};
+
+type RevenueAdjustmentsResponse = { adjustments: RevenueAdjustment[]; periodTotal: number };
 
 type RangeKey = "today" | "yesterday" | "week" | "thisMonth" | "month" | "custom";
 
@@ -117,6 +129,9 @@ export default function AnalyticsPage() {
   const [customTo, setCustomTo] = useState("");
   const [eventId, setEventId] = useState("all");
   const [branchId, setBranchId] = useState("all");
+  // Admin-only "All branches" — combines Suli + Erbil into one total, across
+  // every box/stat/chart/order-history row on this page.
+  const [allBranches, setAllBranches] = useState(false);
 
   const { data: eventsData } = useFetch<{ events: { id: string; name: string }[] }>("/api/events/active");
   const events = eventsData?.events ?? [];
@@ -148,8 +163,9 @@ export default function AnalyticsPage() {
     qs.set("to", activeRange.to);
     if (eventId !== "all") qs.set("eventId", eventId);
     if (branchId !== "all") qs.set("branchId", branchId);
+    if (allBranches) qs.set("branch", "all");
     return qs.toString();
-  }, [activeRange, eventId, branchId]);
+  }, [activeRange, eventId, branchId, allBranches]);
 
   // useFetch skips entirely on a null URL, so nothing is requested until the
   // range is bounded.
@@ -167,9 +183,10 @@ export default function AnalyticsPage() {
       qs.set("from", activeRange.from);
       qs.set("to", activeRange.to);
     }
+    if (allBranches) qs.set("branch", "all");
     const qsString = qs.toString();
     return qsString ? `/api/sales-cash?${qsString}` : "/api/sales-cash";
-  }, [range, activeRange, eventId]);
+  }, [range, activeRange, eventId, allBranches]);
   const cash = useFetch<ExpectedCash>(cashUrl);
 
   // POS / FIB / Delivery running balances — same scope rules as cashUrl (event
@@ -182,8 +199,9 @@ export default function AnalyticsPage() {
       qs.set("from", activeRange.from);
       qs.set("to", activeRange.to);
     }
+    if (allBranches) qs.set("branch", "all");
     return qs;
-  }, [range, activeRange, eventId]);
+  }, [range, activeRange, eventId, allBranches]);
 
   function ledgerUrl(bucket: MoneyLedgerBucket): string {
     const qs = new URLSearchParams(ledgerBaseQs);
@@ -197,6 +215,20 @@ export default function AnalyticsPage() {
   const { data: deliverySettings } = useFetch<{
     settings: { platformName: string; color: string };
   }>("/api/delivery/settings");
+
+  // Manual revenue adjustments (item 7) — scoped to the same active range as the
+  // page, so "Total revenue" always reflects the period actually being viewed.
+  const canAdjustRevenue = user.role === "admin" || user.role === "manager";
+  const adjustmentsUrl = activeRange
+    ? `/api/revenue-adjustments?${new URLSearchParams({
+        from: activeRange.from,
+        to: activeRange.to,
+        ...(allBranches ? { branch: "all" } : {}),
+      }).toString()}`
+    : null;
+  const adjustments = useFetch<RevenueAdjustmentsResponse>(adjustmentsUrl);
+  const [adjustModalOpen, setAdjustModalOpen] = useState(false);
+  const [adjustHistoryOpen, setAdjustHistoryOpen] = useState(false);
 
   const [query, setQuery] = useState("");
   const [pmFilter, setPmFilter] = useState<"all" | PaymentMethod>("all");
@@ -263,6 +295,9 @@ export default function AnalyticsPage() {
           branchId={branchId}
           setBranchId={setBranchId}
           branches={branches}
+          isAdmin={isAdmin}
+          allBranches={allBranches}
+          setAllBranches={setAllBranches}
           t={t}
         />
         <EmptyState title={t("sales.filters.pickRange")} />
@@ -274,7 +309,7 @@ export default function AnalyticsPage() {
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (!data) return null;
 
-  const { summary, timing, revenueByDay, topItems, ordersByHour, paymentSplit } = data;
+  const { summary, timing, revenueByDay, topItems, ordersByHour, paymentSplit, today } = data;
   // Colors are assigned per payment method explicitly, not by position — with
   // positional CHART_COLORS[i], the FIB slice's color depended on which OTHER
   // segments happened to be zero (and get filtered out) that day.
@@ -301,34 +336,44 @@ export default function AnalyticsPage() {
         branchId={branchId}
         setBranchId={setBranchId}
         branches={branches}
+        isAdmin={isAdmin}
+        allBranches={allBranches}
+        setAllBranches={setAllBranches}
         t={t}
       />
 
       <MonthExport branchId={branchId} eventId={eventId} />
 
-      {/* Four money buckets (manager + admin): Cash, POS, FIB, Delivery. Detailed
-          admin-only ledger management (opening balances, settlements) lives on
-          the /cash-tracking page — this is the at-a-glance running balance. */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      {/* Five summary boxes (manager + admin): Total revenue, Cash, POS/Card,
+          Delivery, FIB. Detailed admin-only ledger management (opening balances,
+          settlements) lives on the /cash-tracking page — this is the
+          at-a-glance running balance for the selected day/period. */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
+        <TotalRevenueCard
+          totalRevenue={summary.totalRevenue}
+          adjustmentTotal={adjustments.data?.periodTotal ?? 0}
+          canAdjust={canAdjustRevenue}
+          onAdjust={() => setAdjustModalOpen(true)}
+          onHistory={() => setAdjustHistoryOpen(true)}
+        />
         {cash.data && <ExpectedCashCard data={cash.data} />}
         {posLedger.data && (
           <LedgerBalanceCard label={t("sales.pos.title")} data={posLedger.data} />
         )}
-        {fibLedger.data && (
-          <LedgerBalanceCard label={t("sales.fib.title")} data={fibLedger.data} />
-        )}
         {deliveryLedger.data && (
           <LedgerBalanceCard
-            label={deliverySettings?.settings.platformName ?? t("sales.delivery.title")}
+            label={allBranches ? t("sales.delivery.title") : deliverySettings?.settings.platformName ?? t("sales.delivery.title")}
             data={deliveryLedger.data}
           />
+        )}
+        {fibLedger.data && (
+          <LedgerBalanceCard label={t("sales.fib.title")} data={fibLedger.data} />
         )}
       </div>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         <Stat label={t("sales.stats.orders")} value={num(summary.totalOrders)} />
-        <Stat label={t("sales.stats.revenue")} value={iqd(summary.totalRevenue)} accent />
         <Stat label={t("sales.stats.avgOrder")} value={iqd(summary.avgOrderValue)} />
         <Stat
           label={t("sales.stats.busiestHour")}
@@ -340,6 +385,31 @@ export default function AnalyticsPage() {
           value={timing.slowest ? `#${timing.slowest.pagerNumber} · ${duration(timing.slowest.durationSeconds)}` : "—"}
         />
       </div>
+
+      {/* Fixed "today" snapshot — always today's business day, regardless of
+          the range selected above (see /api/analytics's `today` field). */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <Stat label={t("sales.today.orders")} value={num(today.orders)} />
+        <Stat label={t("sales.today.cash")} value={iqd(today.cash)} accent />
+        <Stat label={t("sales.today.fib")} value={iqd(today.fib)} />
+        <Stat label={t("sales.today.pos")} value={iqd(today.pos)} />
+      </div>
+
+      {adjustModalOpen && (
+        <RevenueAdjustmentModal
+          onClose={() => setAdjustModalOpen(false)}
+          onSaved={() => {
+            setAdjustModalOpen(false);
+            adjustments.reload();
+          }}
+        />
+      )}
+      {adjustHistoryOpen && (
+        <RevenueAdjustmentHistoryModal
+          adjustments={adjustments.data?.adjustments ?? []}
+          onClose={() => setAdjustHistoryOpen(false)}
+        />
+      )}
 
       {/* Charts */}
       <div className="grid lg:grid-cols-2 gap-4 mb-5">
@@ -589,6 +659,9 @@ type RangeFilterProps = {
   branchId: string;
   setBranchId: (v: string) => void;
   branches: { id: string; name: string }[];
+  isAdmin: boolean;
+  allBranches: boolean;
+  setAllBranches: (v: boolean) => void;
   t: (key: string, vars?: Record<string, string>) => string;
 };
 
@@ -605,6 +678,9 @@ function RangeFilter({
   branchId,
   setBranchId,
   branches,
+  isAdmin,
+  allBranches,
+  setAllBranches,
   t,
 }: RangeFilterProps) {
   return (
@@ -656,7 +732,7 @@ function RangeFilter({
           </option>
         ))}
       </select>
-      {branches.length > 1 && (
+      {branches.length > 1 && !allBranches && (
         <select className="input py-2 w-auto" value={branchId} onChange={(e) => setBranchId(e.target.value)}>
           <option value="all">{t("sales.filters.allPhysicalBranches")}</option>
           {branches.map((b) => (
@@ -665,6 +741,14 @@ function RangeFilter({
             </option>
           ))}
         </select>
+      )}
+      {isAdmin && (
+        <button
+          onClick={() => setAllBranches(!allBranches)}
+          className={`btn px-4 py-2 text-sm ${allBranches ? "bg-cocoa text-white" : "bg-black/5 dark:bg-white/10"}`}
+        >
+          {t("sales.filters.allCities")}
+        </button>
       )}
     </div>
   );
@@ -729,6 +813,149 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
       <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">{label}</p>
       <p className={`text-xl font-extrabold mt-1 ${accent ? "text-leaf" : ""}`}>{value}</p>
     </div>
+  );
+}
+
+// ---- Total revenue (item 1) + manual adjustment entry point (item 7) ----
+function TotalRevenueCard({
+  totalRevenue,
+  adjustmentTotal,
+  canAdjust,
+  onAdjust,
+  onHistory,
+}: {
+  totalRevenue: number;
+  adjustmentTotal: number;
+  canAdjust: boolean;
+  onAdjust: () => void;
+  onHistory: () => void;
+}) {
+  const { t } = useLanguage();
+  const adjusted = totalRevenue + adjustmentTotal;
+  return (
+    <div className="card p-4 border-corn/50 bg-corn/10 dark:bg-corn/5">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <h2 className="font-extrabold">{t("sales.totalRevenue.title")}</h2>
+        {canAdjust && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={onHistory}
+              title={t("sales.totalRevenue.history")}
+              className="btn-ghost size-7 rounded-lg"
+            >
+              <History size={14} />
+            </button>
+            <button
+              onClick={onAdjust}
+              title={t("sales.totalRevenue.adjust")}
+              className="btn-ghost size-7 rounded-lg"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+        )}
+      </div>
+      <p className="text-2xl font-extrabold">{iqd(adjusted)}</p>
+      {adjustmentTotal !== 0 ? (
+        <p className="text-xs opacity-50 mt-1">
+          {t("sales.totalRevenue.systemTotal", { amount: iqd(totalRevenue) })} ·{" "}
+          {adjustmentTotal > 0 ? "+" : ""}
+          {iqd(adjustmentTotal)}
+        </p>
+      ) : (
+        <p className="text-xs opacity-50 mt-1">{t("sales.totalRevenue.hint")}</p>
+      )}
+    </div>
+  );
+}
+
+function RevenueAdjustmentModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const { t } = useLanguage();
+  const toast = useToast();
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const amountNum = Number(amount);
+  const valid = Number.isFinite(amountNum) && amountNum !== 0 && reason.trim().length > 0;
+
+  async function save() {
+    if (!valid) return;
+    setSaving(true);
+    try {
+      await apiSend("/api/revenue-adjustments", "POST", { amount: amountNum, reason: reason.trim() });
+      toast.show(t("sales.totalRevenue.adjustmentSaved"));
+      onSaved();
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : t("common.failed"), "error");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={t("sales.totalRevenue.adjust")}>
+      <div className="flex flex-col gap-3">
+        <div>
+          <label className="label">{t("sales.totalRevenue.amountLabel")}</label>
+          <input
+            className="input"
+            type="number"
+            placeholder="-5000"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+          />
+          <p className="text-xs opacity-50 mt-1">{t("sales.totalRevenue.amountHint")}</p>
+        </div>
+        <div>
+          <label className="label">{t("common.reason")}</label>
+          <textarea
+            className="input"
+            rows={2}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder={t("sales.totalRevenue.reasonPlaceholder")}
+          />
+        </div>
+        <button className="btn-primary py-2.5" onClick={save} disabled={saving || !valid}>
+          {saving ? t("common.loading") : t("common.save")}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function RevenueAdjustmentHistoryModal({
+  adjustments,
+  onClose,
+}: {
+  adjustments: RevenueAdjustment[];
+  onClose: () => void;
+}) {
+  const { t } = useLanguage();
+  return (
+    <Modal open onClose={onClose} title={t("sales.totalRevenue.history")}>
+      {adjustments.length === 0 ? (
+        <EmptyState title={t("sales.totalRevenue.noAdjustments")} />
+      ) : (
+        <div className="flex flex-col gap-2 max-h-[50vh] overflow-y-auto">
+          {adjustments.map((a) => (
+            <div key={a.id} className="rounded-lg border border-black/10 dark:border-white/10 p-2.5">
+              <div className="flex items-center justify-between">
+                <span className={`font-bold ${a.amount > 0 ? "text-leaf" : "text-red-500"}`}>
+                  {a.amount > 0 ? "+" : ""}
+                  {iqd(a.amount)}
+                </span>
+                <span className="text-xs opacity-50">
+                  {shortDate(a.date)} {shortTime(a.date)}
+                </span>
+              </div>
+              <p className="text-sm mt-0.5">{a.reason}</p>
+              <p className="text-xs opacity-50 mt-0.5">{a.createdBy?.fullName ?? "—"}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
 

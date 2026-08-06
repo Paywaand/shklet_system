@@ -57,6 +57,11 @@ export type Order = {
   staffId: string | null;
   staff?: { fullName: string } | null;
   items: OrderItem[];
+  // Loyalty / per-customer discount (optional — see Customer in the schema).
+  customerId?: string | null;
+  customerPhone?: string | null;
+  discountPct?: number | null;
+  discountAmount?: number;
   // Offline (POS) idempotency key — present on rows created by the cashier tablet.
   clientId?: string | null;
   // Client-only flags set on optimistic cards rendered from the offline outbox. Never
@@ -70,6 +75,7 @@ export type Order = {
 
 export type DeliveryOrder = {
   id: string;
+  shortId: string | null;
   platformName: string; // snapshot ("Toters" | "Talabat" | ...)
   commissionPct: number; // snapshot of the platform commission at order time
   reference: string | null;
@@ -85,6 +91,8 @@ export type DeliveryOrder = {
   staffId: string | null;
   staff?: { fullName: string } | null;
   items: OrderItem[];
+  // Soft-delete marker — set when a manager/admin voids the order (see item 6).
+  deletedAt?: string | null;
 };
 
 // A warehouse category badge token; mapped to Tailwind classes client-side.

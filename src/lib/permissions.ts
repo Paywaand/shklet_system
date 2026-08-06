@@ -20,6 +20,7 @@ export const PERMISSIONS = [
   { key: "profit.view", label: "View Profit Overview", module: "Profit" },
   { key: "reports.view", label: "Download Monthly Reports", module: "Reports" },
   { key: "delivery.view", label: "View Delivery Revenue", module: "Delivery" },
+  { key: "loyalty.manage", label: "Manage Loyalty & Discounts", module: "Loyalty" },
   { key: "staff.manage", label: "Manage Staff", module: "Staff" },
   { key: "permissions.manage", label: "Manage Roles & Permissions", module: "Roles" },
 ] as const;
@@ -44,6 +45,7 @@ export const DEFAULT_GRANTS: Record<Role, PermissionKey[]> = {
     // not be able to download financial / ingredient-cost reports.
     "reports.view",
     "delivery.view",
+    "loyalty.manage",
     "staff.manage",
     "permissions.manage",
   ],
@@ -55,6 +57,10 @@ export const DEFAULT_GRANTS: Record<Role, PermissionKey[]> = {
     "expenses.manage",
     "events.manage",
     "analytics.view",
+    // Delivery revenue view + the void/delete action on that page — managers can
+    // now void a Talabat/Toters order (soft-delete, see DeliveryOrder.deletedAt).
+    "delivery.view",
+    "loyalty.manage",
     // recipes.manage + estimated.view are admin-only: managers must not see sauce
     // recipes, batch/bucket costs, or per-item profit margins.
   ],
@@ -75,6 +81,7 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   "/profit": "profit.view",
   "/reports": "reports.view",
   "/delivery": "delivery.view",
+  "/loyalty": "loyalty.manage",
   "/staff": "staff.manage",
   "/permissions": "permissions.manage",
 };

@@ -6,6 +6,7 @@
 // where safe money = all safe deposits − safe-sourced expenses in range.
 // This mirrors the admin Cash Tracking model so the figure equals "what the
 // manager currently holds".
+import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getCashBaseline, clampToBaseline } from "./cashSettings";
 
@@ -21,11 +22,19 @@ export type ExpectedCashResult = {
 };
 
 export async function computeExpectedCashOnHand(
-  branch: string,
+  branchArg: string | string[],
   range: { gte?: Date; lte?: Date },
   eventId?: string | null
 ): Promise<ExpectedCashResult> {
-  const baseline = await getCashBaseline(branch);
+  // Combined mode (admin "All branches"): sum across every city. The baseline
+  // is per-city, so use the EARLIEST of them — a combined figure can't apply a
+  // single city's go-live cutoff to the others.
+  const branches = Array.isArray(branchArg) ? branchArg : [branchArg];
+  const branch: Prisma.StringFilter | string = Array.isArray(branchArg) ? { in: branchArg } : branchArg;
+  const baselines = await Promise.all(branches.map((b) => getCashBaseline(b)));
+  const baseline = baselines.some((b) => b === null)
+    ? null
+    : baselines.reduce((min, b) => (b! < min! ? b : min), baselines[0]);
   const gte = clampToBaseline(range.gte, baseline);
   const { lte } = range;
 
@@ -43,9 +52,17 @@ export async function computeExpectedCashOnHand(
         },
         _sum: { total: true },
       }),
+      // Only CASH-paid expenses draw down cash — an FIB-paid expense never
+      // touched the manager's/safe's cash, it drew down the FIB ledger instead
+      // (see Expense.paymentMethod + the linked MoneyLedgerEntry settlement).
       prisma.expense.groupBy({
         by: ["source"],
-        where: { branch, date: { gte, lte }, ...(eventId !== undefined ? { eventId } : {}) },
+        where: {
+          branch,
+          date: { gte, lte },
+          paymentMethod: "cash",
+          ...(eventId !== undefined ? { eventId } : {}),
+        },
         _sum: { amount: true },
       }),
       // Safe is a running balance — all deposits since the baseline count.

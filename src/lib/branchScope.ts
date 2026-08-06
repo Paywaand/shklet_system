@@ -7,7 +7,7 @@
 import { cookies } from "next/headers";
 import { prisma } from "./prisma";
 import type { Session } from "./auth";
-import { ACTIVE_BRANCH_COOKIE, ACTIVE_BRANCH_ID_COOKIE, DEFAULT_BRANCH, isBranch, type Branch } from "./branches";
+import { ACTIVE_BRANCH_COOKIE, ACTIVE_BRANCH_ID_COOKIE, BRANCHES, DEFAULT_BRANCH, isBranch, type Branch } from "./branches";
 
 // City-level scope ("suli" | "erbil") — unchanged from before the physical-branch
 // split, still used by every city-scoped model (Menu, Inventory, Expenses, Cash
@@ -16,6 +16,18 @@ export async function activeBranch(session: Pick<Session, "branch">): Promise<Br
   if (isBranch(session.branch)) return session.branch;
   const c = (await cookies()).get(ACTIVE_BRANCH_COOKIE)?.value;
   return isBranch(c) ? c : DEFAULT_BRANCH;
+}
+
+// "Combined" scope (admin-only): every city summed together, for the Sales and
+// Dashboard pages' "All branches" view. Branch-bound staff can never combine —
+// only the super admin (session.branch === null) may request it; anyone else
+// silently falls back to their normal single-city scope.
+export async function resolveBranchFilter(
+  session: Pick<Session, "branch">,
+  combinedRequested: boolean
+): Promise<Branch | Branch[]> {
+  if (combinedRequested && session.branch === null) return [...BRANCHES];
+  return activeBranch(session);
 }
 
 // Physical-branch scope (Branch.id) — used by Staff, Orders, and Hours.

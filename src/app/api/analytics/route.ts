@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { authorize } from "@/lib/guard";
-import { activeBranch, activeBranchId } from "@/lib/branchScope";
+import { activeBranchId, resolveBranchFilter } from "@/lib/branchScope";
 import { MIN_PREP_SECONDS, MAX_PREP_SECONDS } from "@/lib/prepTime";
 import { SYSTEM_TIME_ZONE } from "@/lib/format";
 import { getBusinessHours } from "@/lib/businessHours";
+import { getBusinessDayBounds, currentBusinessDay } from "@/lib/businessDay";
 import { businessDayExpr, localHourExpr, dateKey } from "@/lib/reportingSql";
-import { orderScopeSql } from "@/lib/orderScope";
+import { orderScopeSql, orderScopeWhere } from "@/lib/orderScope";
 
 // GET /api/analytics?from=ISO&to=ISO
 //
@@ -24,10 +25,10 @@ import { orderScopeSql } from "@/lib/orderScope";
 export async function GET(req: Request) {
   const guard = await authorize("analytics.view");
   if (!guard.ok) return guard.response;
-  const branch = await activeBranch(guard.session);
   const branchId = await activeBranchId(guard.session);
 
   const url = new URL(req.url);
+  const branch = await resolveBranchFilter(guard.session, url.searchParams.get("branch") === "all");
   const from = url.searchParams.get("from");
   const to = url.searchParams.get("to");
   if (!from || !to) {
@@ -62,12 +63,26 @@ export async function GET(req: Request) {
   // conditions by hand, including the same UTC-safe cast (see orderScope.ts's
   // comment on why a bound Date must not be compared to `placedAt` uncast).
   const deliveryWhere = Prisma.sql`
-    d."branch" = ${branch}
+    ${Array.isArray(branch) ? Prisma.sql`d."branch" IN (${Prisma.join(branch)})` : Prisma.sql`d."branch" = ${branch}`}
     AND d."placedAt" >= (${gte}::timestamptz AT TIME ZONE 'UTC')
     AND d."placedAt" <= (${lte}::timestamptz AT TIME ZONE 'UTC')
     AND d."status" <> 'cancelled'
+    AND d."deletedAt" IS NULL
   `;
   const deliveryBday = businessDayExpr(Prisma.sql`d."placedAt"`, businessHours, SYSTEM_TIME_ZONE);
+
+  // Fixed "today" snapshot (item: Orders/Cash/FIB/POS boxes) — always today's
+  // business day, independent of the page's selected date range, so the admin
+  // can compare "the period I'm looking at" against "what's happened today".
+  const todayBounds = getBusinessDayBounds(currentBusinessDay(new Date(), businessHours), businessHours);
+  const todayWhere = orderScopeWhere({
+    branch,
+    branchId: url.searchParams.get("branchId"),
+    eventId: url.searchParams.get("eventId"),
+    gte: todayBounds.start,
+    lte: todayBounds.end,
+    excludeCancelled: true,
+  });
 
   // One scan, four rollups. GROUPING SETS yields revenue-by-business-day,
   // orders-by-hour, the payment split and the grand total from a single pass;
@@ -85,7 +100,7 @@ export async function GET(req: Request) {
 
   type DeliveryRollupRow = { g_bday: number; bday: Date | null; cnt: bigint; revenue: bigint };
 
-  const [rollup, timing, slowest, topItems, deliveryRollup] = await Promise.all([
+  const [rollup, timing, slowest, topItems, deliveryRollup, todayByPaymentAgg] = await Promise.all([
     prisma.$queryRaw<RollupRow[]>`
       WITH src AS (
         SELECT ${bday} AS bday, ${hour} AS hr, o."paymentMethod" AS pm, o."total" AS total
@@ -146,6 +161,12 @@ export async function GET(req: Request) {
       FROM dsrc
       GROUP BY GROUPING SETS ((bday), ())
     `,
+    prisma.order.groupBy({
+      by: ["paymentMethod"],
+      where: todayWhere,
+      _sum: { total: true },
+      _count: true,
+    }),
   ]);
 
   // Unpack the grouping sets: a GROUPING() flag of 1 means that column was
@@ -204,8 +225,18 @@ export async function GET(req: Request) {
   const avgDuration = timing[0]?.avg_dur;
   const avgDurationSeconds = avgDuration != null ? Math.round(avgDuration) : null;
 
+  // Fixed "today" snapshot — Orders/Cash/FIB/POS, always today's business day
+  // regardless of the selected range (see todayWhere above).
+  const todayByMethod = { cash: 0, card: 0, pos: 0 };
+  let todayOrders = 0;
+  for (const g of todayByPaymentAgg) {
+    if (g.paymentMethod in todayByMethod) todayByMethod[g.paymentMethod as keyof typeof todayByMethod] = g._sum.total ?? 0;
+    todayOrders += g._count;
+  }
+
   return NextResponse.json({
     summary: { totalOrders, totalRevenue, avgOrderValue, busiestHour },
+    today: { orders: todayOrders, cash: todayByMethod.cash, fib: todayByMethod.card, pos: todayByMethod.pos },
     timing: {
       avgDurationSeconds,
       slowest: slowest[0]

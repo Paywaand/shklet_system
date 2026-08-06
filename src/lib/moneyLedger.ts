@@ -32,15 +32,17 @@ export type MoneyLedgerResult = {
 
 async function computeAccrual(
   bucket: MoneyLedgerBucket,
-  branch: string,
+  branch: string | { in: string[] },
   gte: Date | undefined,
   lte: Date | undefined,
   eventId?: string | null
 ): Promise<number> {
   if (bucket === "delivery") {
     // DeliveryOrder has no eventId column — delivery orders aren't linked to events.
+    // Cancelled/voided orders never took money and must not count (same rule as
+    // pos/fib below).
     const agg = await prisma.deliveryOrder.aggregate({
-      where: { branch, placedAt: { gte, lte } },
+      where: { branch, placedAt: { gte, lte }, status: { not: "cancelled" }, deletedAt: null },
       _sum: { netTotal: true },
     });
     return agg._sum.netTotal ?? 0;
@@ -60,12 +62,19 @@ async function computeAccrual(
 }
 
 export async function computeLedgerBalance(
-  branch: string,
+  branchArg: string | string[],
   bucket: MoneyLedgerBucket,
   range: { gte?: Date; lte?: Date },
   eventId?: string | null
 ): Promise<MoneyLedgerResult> {
-  const baseline = await getLedgerBaseline(branch, bucket);
+  // Combined mode (admin "All branches"): sum every city's ledger together,
+  // using the earliest of their baselines (same reasoning as expectedCash.ts).
+  const branches = Array.isArray(branchArg) ? branchArg : [branchArg];
+  const branch = Array.isArray(branchArg) ? { in: branchArg } : branchArg;
+  const baselines = await Promise.all(branches.map((b) => getLedgerBaseline(b, bucket)));
+  const baseline = baselines.some((b) => b === null)
+    ? null
+    : baselines.reduce((min, b) => (b! < min! ? b : min), baselines[0]);
   const gte = clampToBaseline(range.gte, baseline);
   const { lte } = range;
 

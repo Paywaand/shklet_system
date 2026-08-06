@@ -60,6 +60,10 @@ function monthLabel(ym: string) {
 export default function DeliveryPage() {
   const { user, businessHours } = useSession();
   const isAdmin = user.role === "admin";
+  // Voiding (soft-deleting) a delivery order is admin OR manager — the server
+  // enforces this too (see DELETE /api/delivery-orders/:id); this only controls
+  // the button. Platform settings (commission %) stay admin-only below.
+  const canVoid = user.role === "admin" || user.role === "manager";
   const toast = useToast();
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [range, setRange] = useState<RangeKey>("month");
@@ -92,7 +96,7 @@ export default function DeliveryPage() {
         o.netTotal,
         o.prepSeconds != null ? duration(o.prepSeconds) : "",
         o.arriveSeconds != null ? duration(o.arriveSeconds) : "",
-        o.status,
+        o.deletedAt ? "voided" : o.status,
       ]),
     ];
     const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -104,11 +108,12 @@ export default function DeliveryPage() {
   }
 
   async function deleteOrder(o: DeliveryOrder) {
-    if (!confirm(`Are you sure you want to delete this ${platformName} order?`)) return;
+    if (!confirm(`Void this ${platformName} order? It stays on record (tagged "Voided") but is excluded from revenue.`))
+      return;
     setDeletingId(o.id);
     try {
       await apiSend(`/api/delivery-orders/${o.id}`, "DELETE");
-      toast.show("Delivery order deleted");
+      toast.show("Delivery order voided");
       reload();
     } catch (e) {
       toast.show(e instanceof Error ? e.message : "Failed to delete", "error");
@@ -224,12 +229,15 @@ export default function DeliveryPage() {
                       <th className="py-2 pr-3">Prep</th>
                       <th className="py-2 pr-3">→ Driver</th>
                       <th className="py-2">Status</th>
-                      {isAdmin && <th className="py-2 pl-3 text-right">Actions</th>}
+                      {canVoid && <th className="py-2 pl-3 text-right">Actions</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {data.orders.map((o) => (
-                      <tr key={o.id} className="border-b border-black/5 dark:border-white/5">
+                      <tr
+                        key={o.id}
+                        className={`border-b border-black/5 dark:border-white/5 ${o.deletedAt ? "opacity-50" : ""}`}
+                      >
                         <td className="py-2 pr-3 opacity-70 whitespace-nowrap">
                           {shortDate(o.placedAt)} {shortTime(o.placedAt)}
                         </td>
@@ -244,19 +252,25 @@ export default function DeliveryPage() {
                         <td className="py-2 pr-3 opacity-70">{duration(o.prepSeconds)}</td>
                         <td className="py-2 pr-3 opacity-70">{duration(o.arriveSeconds)}</td>
                         <td className="py-2">
-                          <span className="chip bg-black/10 dark:bg-white/10">{o.status.replace("_", " ")}</span>
+                          {o.deletedAt ? (
+                            <span className="chip bg-red-500/15 text-red-500">Voided</span>
+                          ) : (
+                            <span className="chip bg-black/10 dark:bg-white/10">{o.status.replace("_", " ")}</span>
+                          )}
                         </td>
-                        {isAdmin && (
+                        {canVoid && (
                           <td className="py-2 pl-3 text-right">
-                            <button
-                              onClick={() => deleteOrder(o)}
-                              disabled={deletingId === o.id}
-                              title="Delete order"
-                              aria-label="Delete order"
-                              className="btn-ghost size-8 rounded-lg text-red-500 disabled:opacity-50"
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                            {!o.deletedAt && (
+                              <button
+                                onClick={() => deleteOrder(o)}
+                                disabled={deletingId === o.id}
+                                title="Void order"
+                                aria-label="Void order"
+                                className="btn-ghost size-8 rounded-lg text-red-500 disabled:opacity-50"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
                           </td>
                         )}
                       </tr>

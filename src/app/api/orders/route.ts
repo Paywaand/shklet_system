@@ -4,6 +4,7 @@ import { authorize, audit } from "@/lib/guard";
 import { generateUniqueOrderShortId } from "@/lib/shortId";
 import { activeBranch, activeBranchId } from "@/lib/branchScope";
 import { isPaymentMethod } from "@/lib/paymentMethods";
+import { applyLoyalty, LoyaltyError } from "@/lib/loyalty";
 
 // POST /api/orders — place a new order (POS).
 export async function POST(req: Request) {
@@ -57,7 +58,8 @@ export async function POST(req: Request) {
       { status: 409 }
     );
 
-  // Build line items and compute total server-side (never trust client total).
+  // Build line items and compute the gross total server-side (never trust the
+  // client total). The loyalty discount/redemption (if any) is deducted below.
   const lineItems = items.map(
     (i: { name: string; price: number; quantity: number; modifier?: string | null }) => ({
       name: String(i.name),
@@ -66,7 +68,7 @@ export async function POST(req: Request) {
       modifier: i.modifier ? String(i.modifier) : null,
     })
   );
-  const total = lineItems.reduce(
+  const grossTotal = lineItems.reduce(
     (s: number, i: { price: number; quantity: number }) => s + i.price * i.quantity,
     0
   );
@@ -80,24 +82,83 @@ export async function POST(req: Request) {
     if (!ev) return NextResponse.json({ error: "Event not found" }, { status: 400 });
   }
 
-  const order = await prisma.order.create({
-    data: {
-      shortId,
-      clientId,
-      branch,
-      branchId,
-      pagerNumber,
-      paymentMethod,
-      orderType,
-      isPaid,
-      total,
-      staffId: guard.session.sub,
-      eventId: body.eventId || null, // null = the branch itself (no event)
-      items: { create: lineItems },
-    },
-    include: { items: true },
-  });
+  const rawPhone = typeof body.customerPhone === "string" ? body.customerPhone : null;
+  const redeemFreeItem = body.redeemFreeItem === true;
 
-  await audit(guard.session.sub, `Placed order ${shortId} (#${pagerNumber}, ${total} IQD)`);
-  return NextResponse.json({ order }, { status: 201 });
+  // Ad-hoc discount (unrelated to loyalty) — the cashier types this in fresh at
+  // checkout for a friend/regular, not stored anywhere per phone/customer.
+  const manualDiscountType = body.manualDiscountType === "pct" || body.manualDiscountType === "flat"
+    ? body.manualDiscountType
+    : null;
+  const manualDiscountValue = Math.round(Number(body.manualDiscountValue));
+  if (manualDiscountType === "pct" && (!Number.isFinite(manualDiscountValue) || manualDiscountValue <= 0 || manualDiscountValue > 100))
+    return NextResponse.json({ error: "Discount percentage must be between 1 and 100" }, { status: 400 });
+  if (manualDiscountType === "flat" && (!Number.isFinite(manualDiscountValue) || manualDiscountValue <= 0))
+    return NextResponse.json({ error: "Discount amount must be a positive number" }, { status: 400 });
+
+  let order;
+  let loyaltyJustQualified = false;
+  try {
+    order = await prisma.$transaction(async (tx) => {
+      const loyalty = await applyLoyalty(tx, { rawPhone, lineItems, redeemFreeItem });
+      loyaltyJustQualified = loyalty.justQualified;
+
+      const afterLoyalty = Math.max(0, grossTotal - loyalty.freeItemAmount);
+      let manualDiscountAmount = 0;
+      let manualDiscountPct: number | null = null;
+      if (manualDiscountType === "pct") {
+        manualDiscountPct = manualDiscountValue;
+        manualDiscountAmount = Math.round(afterLoyalty * (manualDiscountValue / 100));
+      } else if (manualDiscountType === "flat") {
+        manualDiscountAmount = Math.min(manualDiscountValue, afterLoyalty);
+      }
+      const discountAmount = loyalty.freeItemAmount + manualDiscountAmount;
+      const total = Math.max(0, grossTotal - discountAmount);
+
+      const created = await tx.order.create({
+        data: {
+          shortId,
+          clientId,
+          branch,
+          branchId,
+          pagerNumber,
+          paymentMethod,
+          orderType,
+          isPaid,
+          total,
+          staffId: guard.session.sub,
+          eventId: body.eventId || null, // null = the branch itself (no event)
+          items: { create: lineItems },
+          customerId: loyalty.customerId,
+          customerPhone: loyalty.customerPhone,
+          discountPct: manualDiscountPct,
+          discountAmount,
+        },
+        include: { items: true },
+      });
+
+      if (loyalty.redeemed && loyalty.customerId) {
+        await tx.loyaltyRedemption.create({
+          data: {
+            customerId: loyalty.customerId,
+            orderId: created.id,
+            branch,
+            staffId: guard.session.sub,
+          },
+        });
+      }
+
+      return created;
+    });
+  } catch (e) {
+    if (e instanceof LoyaltyError) return NextResponse.json({ error: e.message }, { status: 400 });
+    throw e;
+  }
+
+  const discountNote = order.discountAmount > 0 ? `, discount ${order.discountAmount} IQD` : "";
+  await audit(guard.session.sub, `Placed order ${shortId} (#${pagerNumber}, ${order.total} IQD${discountNote})`);
+  return NextResponse.json(
+    { order, loyaltyStatus: { justQualified: loyaltyJustQualified, phone: order.customerPhone } },
+    { status: 201 }
+  );
 }

@@ -23,6 +23,8 @@ type Expense = {
   description: string | null;
   amount: number;
   eventId: string | null;
+  paymentMethod: "cash" | "fib";
+  source?: "manager" | "safe";
   createdBy?: { fullName: string } | null;
 };
 
@@ -169,6 +171,9 @@ export default function ExpensesPage() {
                   <td className="p-3 opacity-80">{shortDate(e.date)}</td>
                   <td className="p-3">
                     <span className="chip bg-black/10 dark:bg-white/10">{categoryLabel(t, e.category)}</span>
+                    {e.paymentMethod === "fib" && (
+                      <span className="chip bg-fib/15 text-fib text-[10px] ml-1">{t("common.card")}</span>
+                    )}
                   </td>
                   <td className="p-3 opacity-80 max-w-[280px] truncate">{e.description || "—"}</td>
                   <td className="p-3 font-bold">{iqd(e.amount)}</td>
@@ -219,7 +224,8 @@ function ExpenseModal({
   const [description, setDescription] = useState(expense?.description ?? "");
   const [amount, setAmount] = useState(expense?.amount?.toString() ?? "");
   const [linkedTo, setLinkedTo] = useState(expense?.eventId ?? ""); // "" = main 60 Street Branch
-  const [source, setSource] = useState((expense as Record<string, unknown>)?.source === "safe" ? "safe" : "manager");
+  const [paymentMethod, setPaymentMethod] = useState<"cash" | "fib">(expense?.paymentMethod ?? "cash");
+  const [source, setSource] = useState(expense?.source === "safe" ? "safe" : "manager");
   const [saving, setSaving] = useState(false);
   const events = useFetch<{ events: { id: string; name: string }[] }>("/api/events/active");
   const toast = useToast();
@@ -230,9 +236,17 @@ function ExpenseModal({
   async function save() {
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = { date, category, description, amount, eventId: linkedTo || null };
-      // Only admin can choose the cash source; managers always default to "manager" server-side
-      if (isAdmin) payload.source = source;
+      const payload: Record<string, unknown> = {
+        date,
+        category,
+        description,
+        amount,
+        eventId: linkedTo || null,
+        paymentMethod,
+      };
+      // Cash source only applies when paying from cash; only admin can choose it
+      // (managers always default to "manager" server-side).
+      if (isAdmin && paymentMethod === "cash") payload.source = source;
       if (expense) await apiSend(`/api/expenses/${expense.id}`, "PATCH", payload);
       else await apiSend("/api/expenses", "POST", payload);
       toast.show(t("expenses.toast.expenseSaved"));
@@ -274,8 +288,30 @@ function ExpenseModal({
             onChange={(e) => setAmount(e.target.value)}
           />
         </div>
-        {/* Admin-only: choose whether to take money from manager or safe */}
-        {isAdmin && (
+        <div>
+          <label className="label">{t("expenses.modal.paymentMethod")}</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setPaymentMethod("cash")}
+              className={`btn py-2.5 text-sm ${paymentMethod === "cash" ? "bg-leaf text-white" : "bg-black/5 dark:bg-white/10"}`}
+            >
+              {t("common.cash")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPaymentMethod("fib")}
+              className={`btn py-2.5 text-sm ${paymentMethod === "fib" ? "bg-fib text-white" : "bg-black/5 dark:bg-white/10"}`}
+            >
+              {t("common.card")}
+            </button>
+          </div>
+          {paymentMethod === "fib" && (
+            <p className="text-xs opacity-50 mt-1">{t("expenses.modal.fibHint")}</p>
+          )}
+        </div>
+        {/* Admin-only, cash payments only: choose whether to take money from manager or safe */}
+        {isAdmin && paymentMethod === "cash" && (
           <div>
             <label className="label">{t("expenses.modal.cashSource")}</label>
             <div className="grid grid-cols-2 gap-2">

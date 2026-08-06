@@ -51,7 +51,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       select: { category: true, amount: true },
     }),
     prisma.deliveryOrder.findMany({
-      where: { branch, placedAt: { gte, lte } },
+      where: { branch, placedAt: { gte, lte }, deletedAt: null },
       select: { grossTotal: true, netTotal: true },
     }),
     // Ingredient cost = warehouse deductions with a recorded cost (negative totals).

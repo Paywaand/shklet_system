@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { authorize } from "@/lib/guard";
-import { activeBranch, activeBranchId } from "@/lib/branchScope";
+import { activeBranchId, resolveBranchFilter } from "@/lib/branchScope";
 import { monthRange } from "@/lib/cash";
 import { getBusinessHours } from "@/lib/businessHours";
 import { computeExpectedCashOnHand } from "@/lib/expectedCash";
@@ -15,10 +15,10 @@ import { computeExpectedCashOnHand } from "@/lib/expectedCash";
 export async function GET(req: Request) {
   const guard = await authorize("analytics.view");
   if (!guard.ok) return guard.response;
-  const branch = await activeBranch(guard.session);
   const branchId = await activeBranchId(guard.session);
 
   const url = new URL(req.url);
+  const branch = await resolveBranchFilter(guard.session, url.searchParams.get("branch") === "all");
   const fromParam = url.searchParams.get("from");
   const toParam = url.searchParams.get("to");
   const eventIdParam = url.searchParams.get("eventId");

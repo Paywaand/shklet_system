@@ -20,6 +20,7 @@ import {
   Users,
   ShieldCheck,
   Wallet,
+  Gift,
   LayoutDashboard,
   LogOut,
   Menu as MenuIcon,
@@ -154,6 +155,7 @@ export function Sidebar({
           { href: "/estimated", label: "Est. Profit", icon: <Calculator size={20} />, perm: "estimated.view" },
           { href: "/reports", label: "Reports", icon: <FileText size={20} />, perm: "reports.view" },
           { href: "/delivery", label: "Delivery", icon: <Truck size={20} />, perm: "delivery.view" },
+          { href: "/loyalty", label: "Loyalty", icon: <Gift size={20} />, perm: "loyalty.manage" },
         ],
       },
       {

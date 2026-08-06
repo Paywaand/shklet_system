@@ -49,13 +49,19 @@ export async function PATCH(req: Request, props: { params: Promise<{ id: string 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
 
-// DELETE /api/delivery-orders/:id — permanently remove a delivery order.
+// DELETE /api/delivery-orders/:id — SOFT-delete (void) a delivery order.
 //
 // ADMIN/MANAGER-ONLY by role (the same model as branch order deletion): even
 // though all roles can *place* delivery orders, only an admin or manager may
-// delete one. A cashier session hitting this endpoint directly — via the
-// console or curl — gets a 403. Hard-delete; DeliveryOrderItem rows cascade
-// (onDelete: Cascade in the schema), so no constraint errors.
+// void one. A cashier session hitting this endpoint directly — via the
+// console or curl — gets a 403.
+//
+// This is a financial record, so it is never hard-deleted: `deletedAt` is set
+// instead, the row stays in the DB (and in the Delivery page's order history,
+// tagged "Voided"), and every revenue/ledger aggregate (moneyLedger.ts,
+// /api/delivery, /api/analytics, monthly exports/reports) filters it out. Who
+// voided it, when, and its original amount live on the audit log entry below —
+// that's the trail to reconcile against if numbers don't add up later.
 export async function DELETE(_req: Request, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const guard = await authorize();
@@ -64,13 +70,13 @@ export async function DELETE(_req: Request, props: { params: Promise<{ id: strin
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const branch = await activeBranch(guard.session);
 
-  const order = await prisma.deliveryOrder.findFirst({ where: { id: params.id, branch } });
+  const order = await prisma.deliveryOrder.findFirst({ where: { id: params.id, branch, deletedAt: null } });
   if (!order) return NextResponse.json({ error: "Order not found" }, { status: 404 });
 
-  await prisma.deliveryOrder.delete({ where: { id: params.id } });
+  await prisma.deliveryOrder.update({ where: { id: params.id }, data: { deletedAt: new Date() } });
   await audit(
     guard.session.sub,
-    `Deleted ${order.platformName} order ${order.reference ? `"${order.reference}" ` : ""}(${order.grossTotal} IQD)`
+    `Voided ${order.platformName} order ${order.shortId ? `${order.shortId} ` : ""}${order.reference ? `"${order.reference}" ` : ""}(${order.grossTotal} IQD)`
   );
   return new NextResponse(null, { status: 204 });
 }

@@ -18,6 +18,8 @@ import {
   WifiOff,
   RefreshCw,
   AlertTriangle,
+  Info,
+  Gift,
 } from "lucide-react";
 import clsx from "clsx";
 import { useFetch, apiSend } from "@/lib/client";
@@ -26,6 +28,7 @@ import type { MenuItem, ModifierGroup, Order, DeliveryOrder } from "@/lib/types"
 import { usePosOffline } from "@/lib/offline/usePosOffline";
 import { ModifiersSchema, safeParseJson } from "@/lib/schemas";
 import type { PaymentMethod } from "@/lib/paymentMethods";
+import { LOYALTY_FREE_ITEM_NAME, LOYALTY_QUALIFYING_TOTAL, type LoyaltyLookup } from "@/lib/loyaltyShared";
 import { Loading, ErrorState, EmptyState, Modal } from "@/components/ui";
 import { Elapsed } from "@/components/Elapsed";
 import { useToast } from "@/components/Toast";
@@ -84,6 +87,22 @@ export default function CashierPage() {
   const [cartOpen, setCartOpen] = useState(false); // mobile bottom sheet
   const [modifierItem, setModifierItem] = useState<MenuItem | null>(null);
 
+  // Loyalty — optional phone entered at checkout, purely a lookup key. NOT a
+  // discount: reaching 9 unlocks exactly one free Shklet Special.
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [loyaltyInfo, setLoyaltyInfo] = useState<LoyaltyLookup | null>(null);
+  const [loyaltyChecking, setLoyaltyChecking] = useState(false);
+  const [redeemFreeItem, setRedeemFreeItem] = useState(false);
+
+  // Ad-hoc discount — unrelated to loyalty; the cashier types this in fresh
+  // for a friend/regular, per order, via the "i" button on the cart header.
+  const [discountOpen, setDiscountOpen] = useState(false);
+  const [discountType, setDiscountType] = useState<"pct" | "flat">("pct");
+  const [discountValue, setDiscountValue] = useState("");
+  const appliedManualDiscount = discountValue.trim() && Number(discountValue) > 0
+    ? { type: discountType, value: Number(discountValue) }
+    : null;
+
   const categories = pos.menu?.categories ?? [];
   const usedPagers = pos.usedPagers;
   // Categories to render as labelled sections (with dividers). "All" shows every
@@ -97,8 +116,43 @@ export default function CashierPage() {
   // (already language-localised) line names.
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
 
-  const total = useMemo(() => cart.reduce((s, l) => s + l.price * l.quantity, 0), [cart]);
+  const grossTotal = useMemo(() => cart.reduce((s, l) => s + l.price * l.quantity, 0), [cart]);
   const itemCount = cart.reduce((s, l) => s + l.quantity, 0);
+
+  // Loyalty (item 4) — client-side estimate of the discount, mirroring
+  // lib/loyalty.ts's math, so the cashier sees the real total before placing
+  // the order. The server recomputes and is the actual source of truth.
+  const freeItemLine = cart.find(
+    (l) => l.name.trim().toLowerCase() === LOYALTY_FREE_ITEM_NAME.toLowerCase()
+  );
+  const canRedeem = Boolean(freeItemLine && loyaltyInfo?.readyToRedeem);
+  const estimatedDiscount = useMemo(() => {
+    let d = 0;
+    if (redeemFreeItem && canRedeem && freeItemLine) d += freeItemLine.price;
+    const afterLoyalty = Math.max(0, grossTotal - d);
+    if (appliedManualDiscount?.type === "pct") {
+      d += Math.round(afterLoyalty * (appliedManualDiscount.value / 100));
+    } else if (appliedManualDiscount?.type === "flat") {
+      d += Math.min(appliedManualDiscount.value, afterLoyalty);
+    }
+    return d;
+  }, [redeemFreeItem, canRedeem, freeItemLine, appliedManualDiscount, grossTotal]);
+  const total = Math.max(0, grossTotal - estimatedDiscount);
+
+  async function checkLoyalty() {
+    const phone = customerPhone.trim();
+    if (!phone) return setLoyaltyInfo(null);
+    setLoyaltyChecking(true);
+    try {
+      const res = await fetch(`/api/loyalty/lookup?phone=${encodeURIComponent(phone)}`);
+      const data = await res.json();
+      setLoyaltyInfo(data);
+    } catch {
+      toast.show(t("common.failed"), "error");
+    } finally {
+      setLoyaltyChecking(false);
+    }
+  }
 
   // Add an item — if it has modifier groups, prompt first.
   function onItemTap(item: MenuItem) {
@@ -153,6 +207,10 @@ export default function CashierPage() {
           isPaid,
           eventId: branch || null,
           items: lineItemsPayload(),
+          customerPhone: customerPhone.trim() || null,
+          redeemFreeItem,
+          manualDiscountType: appliedManualDiscount?.type ?? null,
+          manualDiscountValue: appliedManualDiscount?.value,
         });
         if (!res.ok) return toast.show(res.error, "error");
         toast.show(
@@ -160,17 +218,28 @@ export default function CashierPage() {
             ? t("cashier.toast.savedOffline", { n: pager as number })
             : t("cashier.toast.orderPlaced", { n: pager as number })
         );
+        // Proactive prompt: the moment a customer's count crosses 9, tell the
+        // cashier right away — they don't have to remember to check next time.
+        if (res.loyaltyStatus?.justQualified) {
+          toast.show(
+            t("cashier.loyalty.justQualified", { phone: res.loyaltyStatus.phone ?? "" }),
+            "success"
+          );
+        }
         // Capture the kitchen ticket while the cart is still populated. Uses
         // the client-side placedAt when the order was queued offline (no
         // server round-trip yet) — a few seconds off is irrelevant for a
-        // ticket that prints immediately.
+        // ticket that prints immediately. `res.order?.total` is the
+        // server-confirmed, loyalty-discounted total when online; falls back
+        // to the client cart sum only while queued offline (no server total yet).
         setReceipt({
           pagerNumber: pager as number,
+          shortId: res.order?.shortId ?? null,
           placedAt: res.order?.placedAt ?? new Date(),
           orderType: orderType === "takeaway" ? "takeaway" : "walk_in",
           paymentMethod: payment,
           isPaid,
-          total,
+          total: res.order?.total ?? total,
           lines: cart.map((l) => ({
             key: l.key,
             name: l.name,
@@ -192,6 +261,7 @@ export default function CashierPage() {
         // Talabat, ...) the customer ordered through.
         setReceipt({
           pagerNumber: null,
+          shortId: created.order.shortId ?? null,
           placedAt: created.order.placedAt,
           orderType: "delivery",
           paymentMethod: "",
@@ -209,9 +279,15 @@ export default function CashierPage() {
         });
       }
       clearCart();
+      setOrderType("walkin");
       setReference("");
       setIsPaid(true);
       setCartOpen(false);
+      setCustomerPhone("");
+      setLoyaltyInfo(null);
+      setRedeemFreeItem(false);
+      setDiscountOpen(false);
+      setDiscountValue("");
     } catch (e) {
       toast.show(e instanceof Error ? e.message : t("cashier.toast.failedPlaceOrder"), "error");
     } finally {
@@ -308,6 +384,21 @@ export default function CashierPage() {
       clearCart={clearCart}
       placeOrder={placeOrder}
       placing={placing}
+      customerPhone={customerPhone}
+      setCustomerPhone={setCustomerPhone}
+      loyaltyInfo={loyaltyInfo}
+      loyaltyChecking={loyaltyChecking}
+      checkLoyalty={checkLoyalty}
+      canRedeem={canRedeem}
+      redeemFreeItem={redeemFreeItem}
+      setRedeemFreeItem={setRedeemFreeItem}
+      discountOpen={discountOpen}
+      setDiscountOpen={setDiscountOpen}
+      discountType={discountType}
+      setDiscountType={setDiscountType}
+      discountValue={discountValue}
+      setDiscountValue={setDiscountValue}
+      estimatedDiscount={estimatedDiscount}
     />
   );
 
@@ -652,6 +743,21 @@ function CartPanel({
   clearCart,
   placeOrder,
   placing,
+  customerPhone,
+  setCustomerPhone,
+  loyaltyInfo,
+  loyaltyChecking,
+  checkLoyalty,
+  canRedeem,
+  redeemFreeItem,
+  setRedeemFreeItem,
+  discountOpen,
+  setDiscountOpen,
+  discountType,
+  setDiscountType,
+  discountValue,
+  setDiscountValue,
+  estimatedDiscount,
 }: {
   cart: CartLine[];
   total: number;
@@ -671,6 +777,21 @@ function CartPanel({
   clearCart: () => void;
   placeOrder: () => void;
   placing: boolean;
+  customerPhone: string;
+  setCustomerPhone: (s: string) => void;
+  loyaltyInfo: LoyaltyLookup | null;
+  loyaltyChecking: boolean;
+  checkLoyalty: () => void;
+  canRedeem: boolean;
+  redeemFreeItem: boolean;
+  setRedeemFreeItem: (b: boolean) => void;
+  discountOpen: boolean;
+  setDiscountOpen: (b: boolean) => void;
+  discountType: "pct" | "flat";
+  setDiscountType: (t: "pct" | "flat") => void;
+  discountValue: string;
+  setDiscountValue: (s: string) => void;
+  estimatedDiscount: number;
 }) {
   const { t } = useLanguage();
   const isDelivery = orderType === "delivery";
@@ -681,12 +802,65 @@ function CartPanel({
     <div className="card p-4 flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h2 className="font-extrabold text-lg">{t("cashier.cart.currentOrder")}</h2>
-        {cart.length > 0 && (
-          <button onClick={clearCart} className="text-sm text-red-500 font-bold">
-            {t("cashier.cart.clear")}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setDiscountOpen(!discountOpen)}
+            title={t("cashier.discount.button")}
+            className={clsx(
+              "btn-ghost size-8 rounded-lg",
+              discountValue.trim() && Number(discountValue) > 0 && "text-corn"
+            )}
+          >
+            <Info size={16} />
           </button>
-        )}
+          {cart.length > 0 && (
+            <button onClick={clearCart} className="text-sm text-red-500 font-bold">
+              {t("cashier.cart.clear")}
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Ad-hoc discount — unrelated to loyalty; typed fresh per order. */}
+      {discountOpen && (
+        <div className="rounded-xl border border-corn/40 bg-corn/10 p-3">
+          <p className="label mb-1.5">{t("cashier.discount.title")}</p>
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <button
+              type="button"
+              onClick={() => setDiscountType("pct")}
+              className={clsx("btn py-2 text-sm", discountType === "pct" ? "bg-corn text-cocoa" : "bg-black/5 dark:bg-white/10")}
+            >
+              %
+            </button>
+            <button
+              type="button"
+              onClick={() => setDiscountType("flat")}
+              className={clsx("btn py-2 text-sm", discountType === "flat" ? "bg-corn text-cocoa" : "bg-black/5 dark:bg-white/10")}
+            >
+              {t("common.iqd")}
+            </button>
+          </div>
+          <input
+            className="input"
+            type="number"
+            min={0}
+            placeholder={discountType === "pct" ? "10" : "5000"}
+            value={discountValue}
+            onChange={(e) => setDiscountValue(e.target.value)}
+          />
+          {discountValue.trim() && Number(discountValue) > 0 && (
+            <button
+              type="button"
+              onClick={() => setDiscountValue("")}
+              className="text-xs text-red-500 font-semibold mt-1.5"
+            >
+              {t("cashier.discount.clear")}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Order type: Walk-in full-width on top, Delivery + Take Away side by side below */}
       <div className="flex flex-col gap-2">
@@ -847,6 +1021,60 @@ function CartPanel({
                 <AlertTriangle size={18} /> {t("cashier.cart.notPaidYet")}
               </button>
             </div>
+          </div>
+
+          {/* Loyalty (item 4) — optional phone, purely a lookup key. */}
+          <div>
+            <label className="label">{t("cashier.loyalty.phoneLabel")}</label>
+            <div className="flex items-center gap-1.5">
+              <input
+                className="input flex-1"
+                placeholder={t("cashier.loyalty.phonePlaceholder")}
+                value={customerPhone}
+                onChange={(e) => setCustomerPhone(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={checkLoyalty}
+                disabled={!customerPhone.trim() || loyaltyChecking}
+                title={t("cashier.loyalty.check")}
+                className="btn-ghost size-10 rounded-lg shrink-0 disabled:opacity-40"
+              >
+                <Info size={18} />
+              </button>
+            </div>
+            {loyaltyInfo && (
+              <p className="text-xs mt-1.5 font-semibold">
+                {loyaltyInfo.readyToRedeem ? (
+                  <span className="text-leaf">{t("cashier.loyalty.readyToRedeem")}</span>
+                ) : (
+                  <span className="opacity-70">
+                    {t("cashier.loyalty.progress", {
+                      count: String(loyaltyInfo.loyaltyCount),
+                      total: String(LOYALTY_QUALIFYING_TOTAL),
+                      remaining: String(loyaltyInfo.remaining),
+                    })}
+                  </span>
+                )}
+              </p>
+            )}
+            {canRedeem && (
+              <button
+                type="button"
+                onClick={() => setRedeemFreeItem(!redeemFreeItem)}
+                className={clsx(
+                  "btn w-full py-2 mt-2 text-sm",
+                  redeemFreeItem ? "bg-leaf text-white" : "bg-leaf/10 text-leaf border border-leaf/40"
+                )}
+              >
+                <Gift size={16} /> {t("cashier.loyalty.applyFreeItem", { item: LOYALTY_FREE_ITEM_NAME })}
+              </button>
+            )}
+            {estimatedDiscount > 0 && (
+              <p className="text-xs opacity-60 mt-1">
+                {t("cashier.loyalty.discountApplied", { amount: iqd(estimatedDiscount) })}
+              </p>
+            )}
           </div>
         </>
       )}
@@ -1058,9 +1286,14 @@ function ActiveOrders({
                 backgroundColor: o.status === "ready" ? `${deliveryColor}1a` : `${deliveryColor}0d`,
               }}
             >
-              {/* Top row: reference (muted) + platform badge */}
+              {/* Top row: order code (muted) + reference + platform badge */}
               <div className="flex items-start justify-between gap-2 mb-1">
                 <div className="min-w-0">
+                  {o.shortId && (
+                    <span className="font-mono text-xs font-bold tracking-wider opacity-50 block">
+                      {o.shortId}
+                    </span>
+                  )}
                   {o.reference && (
                     <p className="font-bold text-sm truncate">{o.reference}</p>
                   )}

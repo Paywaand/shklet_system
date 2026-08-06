@@ -21,6 +21,13 @@ export type CreatePayload = {
   isPaid: boolean;
   eventId: string | null;
   items: OfflineLineItem[];
+  // Loyalty (optional — see lib/loyalty.ts). Spread straight through to
+  // POST /api/orders on both the online and offline-replay paths.
+  customerPhone?: string | null;
+  redeemFreeItem?: boolean;
+  // Ad-hoc discount, unrelated to loyalty — see pos/page.tsx's cart header "i".
+  manualDiscountType?: "pct" | "flat" | null;
+  manualDiscountValue?: number;
 };
 
 export type LocalStatus = "pending" | "ready" | "collected";
