@@ -181,8 +181,10 @@ export async function GET(req: Request) {
       _sum: { grossTotal: true },
       _count: true,
     }),
+    // "total" bucket only — cash/pos/fib adjustments now belong to their own
+    // Sales-page boxes and would double-count here otherwise.
     prisma.revenueAdjustment.aggregate({
-      where: { branch, date: { gte: monthRangeBounds.gte, lte: monthRangeBounds.lte } },
+      where: { branch, bucket: "total", date: { gte: monthRangeBounds.gte, lte: monthRangeBounds.lte } },
       _sum: { amount: true },
       _count: true,
     }),

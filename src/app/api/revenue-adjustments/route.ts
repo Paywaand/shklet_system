@@ -3,16 +3,24 @@ import { prisma } from "@/lib/prisma";
 import { authorize, audit } from "@/lib/guard";
 import { activeBranch, resolveBranchFilter } from "@/lib/branchScope";
 
-// GET /api/revenue-adjustments?from=ISO&to=ISO — Sales page.
-// Returns the full all-time log (for the History view) plus `periodTotal`, the
-// sum of adjustments whose `date` falls inside [from, to] (used to correct the
-// displayed "Total revenue" figure for whatever range the page is showing).
+const BUCKETS = ["total", "cash", "pos", "fib"] as const;
+const BUCKET_LABEL: Record<string, string> = { total: "Total revenue", cash: "Cash", pos: "POS", fib: "FIB" };
+
+function parseBucket(v: string | null): (typeof BUCKETS)[number] {
+  return v && (BUCKETS as readonly string[]).includes(v) ? (v as (typeof BUCKETS)[number]) : "total";
+}
+
+// GET /api/revenue-adjustments?bucket=total|cash|pos|fib&from=ISO&to=ISO — Sales page.
+// Returns the full all-time log for that bucket (for the History view) plus
+// `periodTotal`, the sum of adjustments whose `date` falls inside [from, to]
+// (used to correct that box's displayed figure for whatever range is shown).
 export async function GET(req: Request) {
   const guard = await authorize("analytics.view");
   if (!guard.ok) return guard.response;
   const url = new URL(req.url);
   const branchArg = await resolveBranchFilter(guard.session, url.searchParams.get("branch") === "all");
   const branch = Array.isArray(branchArg) ? { in: branchArg } : branchArg;
+  const bucket = parseBucket(url.searchParams.get("bucket"));
   const from = url.searchParams.get("from");
   const to = url.searchParams.get("to");
   const gte = from ? new Date(from) : undefined;
@@ -20,13 +28,13 @@ export async function GET(req: Request) {
 
   const [adjustments, periodAgg] = await Promise.all([
     prisma.revenueAdjustment.findMany({
-      where: { branch },
+      where: { branch, bucket },
       orderBy: { date: "desc" },
       include: { createdBy: { select: { fullName: true } } },
     }),
     gte || lte
       ? prisma.revenueAdjustment.aggregate({
-          where: { branch, date: { gte, lte } },
+          where: { branch, bucket, date: { gte, lte } },
           _sum: { amount: true },
         })
       : null,
@@ -38,10 +46,11 @@ export async function GET(req: Request) {
   });
 }
 
-// POST /api/revenue-adjustments { amount, reason, date? } — manager/admin only.
-// A signed correction to the DISPLAYED revenue total for a day/period when the
-// system total and the actual counted total don't match — never touches any
-// Order row. Always requires a reason; always attributed + timestamped.
+// POST /api/revenue-adjustments { bucket?, amount, reason, date? } — manager/admin
+// only. A signed correction to one of the Sales page's boxes (default "total")
+// for a day/period when the system total and the actual counted total don't
+// match — never touches any Order/DeliveryOrder row. Always requires a reason;
+// always attributed + timestamped.
 export async function POST(req: Request) {
   const guard = await authorize();
   if (!guard.ok) return guard.response;
@@ -50,6 +59,7 @@ export async function POST(req: Request) {
   const branch = await activeBranch(guard.session);
 
   const body = await req.json().catch(() => ({}));
+  const bucket = parseBucket(typeof body.bucket === "string" ? body.bucket : null);
   const amount = Math.round(Number(body.amount));
   const reason = typeof body.reason === "string" ? body.reason.trim() : "";
   if (!Number.isFinite(amount) || amount === 0)
@@ -62,6 +72,7 @@ export async function POST(req: Request) {
   const adjustment = await prisma.revenueAdjustment.create({
     data: {
       branch,
+      bucket,
       amount,
       reason,
       date: body.date ? new Date(body.date) : new Date(),
@@ -70,7 +81,7 @@ export async function POST(req: Request) {
   });
   await audit(
     guard.session.sub,
-    `Revenue adjustment ${amount > 0 ? "+" : ""}${amount} IQD (${branch}) — ${reason}`
+    `${BUCKET_LABEL[bucket]} adjustment ${amount > 0 ? "+" : ""}${amount} IQD (${branch}) — ${reason}`
   );
   return NextResponse.json({ adjustment }, { status: 201 });
 }

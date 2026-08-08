@@ -54,6 +54,8 @@ type OrderPage = {
   totalPages: number;
 };
 
+type AdjustmentBucket = "total" | "cash" | "pos" | "fib";
+
 type RevenueAdjustment = {
   id: string;
   date: string;
@@ -216,19 +218,31 @@ export default function AnalyticsPage() {
     settings: { platformName: string; color: string };
   }>("/api/delivery/settings");
 
-  // Manual revenue adjustments (item 7) — scoped to the same active range as the
-  // page, so "Total revenue" always reflects the period actually being viewed.
+  // Manual revenue adjustments (item 7) — one bucket per editable box (Total
+  // revenue, Cash, POS, FIB — NOT Delivery), scoped to the same active range as
+  // the page so each box always reflects the period actually being viewed.
   const canAdjustRevenue = user.role === "admin" || user.role === "manager";
-  const adjustmentsUrl = activeRange
-    ? `/api/revenue-adjustments?${new URLSearchParams({
-        from: activeRange.from,
-        to: activeRange.to,
-        ...(allBranches ? { branch: "all" } : {}),
-      }).toString()}`
-    : null;
-  const adjustments = useFetch<RevenueAdjustmentsResponse>(adjustmentsUrl);
-  const [adjustModalOpen, setAdjustModalOpen] = useState(false);
-  const [adjustHistoryOpen, setAdjustHistoryOpen] = useState(false);
+  function adjustmentsUrl(bucket: AdjustmentBucket): string | null {
+    if (!activeRange) return null;
+    return `/api/revenue-adjustments?${new URLSearchParams({
+      bucket,
+      from: activeRange.from,
+      to: activeRange.to,
+      ...(allBranches ? { branch: "all" } : {}),
+    }).toString()}`;
+  }
+  const totalAdjustments = useFetch<RevenueAdjustmentsResponse>(adjustmentsUrl("total"));
+  const cashAdjustments = useFetch<RevenueAdjustmentsResponse>(adjustmentsUrl("cash"));
+  const posAdjustments = useFetch<RevenueAdjustmentsResponse>(adjustmentsUrl("pos"));
+  const fibAdjustments = useFetch<RevenueAdjustmentsResponse>(adjustmentsUrl("fib"));
+  const adjustmentsByBucket: Record<AdjustmentBucket, ReturnType<typeof useFetch<RevenueAdjustmentsResponse>>> = {
+    total: totalAdjustments,
+    cash: cashAdjustments,
+    pos: posAdjustments,
+    fib: fibAdjustments,
+  };
+  const [adjustBucket, setAdjustBucket] = useState<AdjustmentBucket | null>(null);
+  const [historyBucket, setHistoryBucket] = useState<AdjustmentBucket | null>(null);
 
   const [query, setQuery] = useState("");
   const [pmFilter, setPmFilter] = useState<"all" | PaymentMethod>("all");
@@ -351,14 +365,29 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
         <TotalRevenueCard
           totalRevenue={summary.totalRevenue}
-          adjustmentTotal={adjustments.data?.periodTotal ?? 0}
+          adjustmentTotal={totalAdjustments.data?.periodTotal ?? 0}
           canAdjust={canAdjustRevenue}
-          onAdjust={() => setAdjustModalOpen(true)}
-          onHistory={() => setAdjustHistoryOpen(true)}
+          onAdjust={() => setAdjustBucket("total")}
+          onHistory={() => setHistoryBucket("total")}
         />
-        {cash.data && <ExpectedCashCard data={cash.data} />}
+        {cash.data && (
+          <ExpectedCashCard
+            data={cash.data}
+            adjustmentTotal={cashAdjustments.data?.periodTotal ?? 0}
+            canAdjust={canAdjustRevenue}
+            onAdjust={() => setAdjustBucket("cash")}
+            onHistory={() => setHistoryBucket("cash")}
+          />
+        )}
         {posLedger.data && (
-          <LedgerBalanceCard label={t("sales.pos.title")} data={posLedger.data} />
+          <LedgerBalanceCard
+            label={t("sales.pos.title")}
+            data={posLedger.data}
+            adjustmentTotal={posAdjustments.data?.periodTotal ?? 0}
+            canAdjust={canAdjustRevenue}
+            onAdjust={() => setAdjustBucket("pos")}
+            onHistory={() => setHistoryBucket("pos")}
+          />
         )}
         {deliveryLedger.data && (
           <LedgerBalanceCard
@@ -367,7 +396,14 @@ export default function AnalyticsPage() {
           />
         )}
         {fibLedger.data && (
-          <LedgerBalanceCard label={t("sales.fib.title")} data={fibLedger.data} />
+          <LedgerBalanceCard
+            label={t("sales.fib.title")}
+            data={fibLedger.data}
+            adjustmentTotal={fibAdjustments.data?.periodTotal ?? 0}
+            canAdjust={canAdjustRevenue}
+            onAdjust={() => setAdjustBucket("fib")}
+            onHistory={() => setHistoryBucket("fib")}
+          />
         )}
       </div>
 
@@ -396,19 +432,21 @@ export default function AnalyticsPage() {
         <Stat label={t("sales.today.pos")} value={iqd(byPaymentMethod.pos)} />
       </div>
 
-      {adjustModalOpen && (
+      {adjustBucket && (
         <RevenueAdjustmentModal
-          onClose={() => setAdjustModalOpen(false)}
+          bucket={adjustBucket}
+          onClose={() => setAdjustBucket(null)}
           onSaved={() => {
-            setAdjustModalOpen(false);
-            adjustments.reload();
+            adjustmentsByBucket[adjustBucket].reload();
+            setAdjustBucket(null);
           }}
         />
       )}
-      {adjustHistoryOpen && (
+      {historyBucket && (
         <RevenueAdjustmentHistoryModal
-          adjustments={adjustments.data?.adjustments ?? []}
-          onClose={() => setAdjustHistoryOpen(false)}
+          bucket={historyBucket}
+          adjustments={adjustmentsByBucket[historyBucket].data?.adjustments ?? []}
+          onClose={() => setHistoryBucket(null)}
         />
       )}
 
@@ -870,7 +908,24 @@ function TotalRevenueCard({
   );
 }
 
-function RevenueAdjustmentModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+// Label shown in the Adjust/History modal titles for each bucket — reuses the
+// same box labels already used elsewhere on this page.
+function bucketTitle(bucket: AdjustmentBucket, t: (key: string) => string): string {
+  if (bucket === "cash") return t("sales.expectedCash.title");
+  if (bucket === "pos") return t("sales.pos.title");
+  if (bucket === "fib") return t("sales.fib.title");
+  return t("sales.totalRevenue.title");
+}
+
+function RevenueAdjustmentModal({
+  bucket,
+  onClose,
+  onSaved,
+}: {
+  bucket: AdjustmentBucket;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const { t } = useLanguage();
   const toast = useToast();
   const [amount, setAmount] = useState("");
@@ -884,7 +939,7 @@ function RevenueAdjustmentModal({ onClose, onSaved }: { onClose: () => void; onS
     if (!valid) return;
     setSaving(true);
     try {
-      await apiSend("/api/revenue-adjustments", "POST", { amount: amountNum, reason: reason.trim() });
+      await apiSend("/api/revenue-adjustments", "POST", { bucket, amount: amountNum, reason: reason.trim() });
       toast.show(t("sales.totalRevenue.adjustmentSaved"));
       onSaved();
     } catch (e) {
@@ -894,7 +949,7 @@ function RevenueAdjustmentModal({ onClose, onSaved }: { onClose: () => void; onS
   }
 
   return (
-    <Modal open onClose={onClose} title={t("sales.totalRevenue.adjust")}>
+    <Modal open onClose={onClose} title={`${t("sales.totalRevenue.adjust")} — ${bucketTitle(bucket, t)}`}>
       <div className="flex flex-col gap-3">
         <div>
           <label className="label">{t("sales.totalRevenue.amountLabel")}</label>
@@ -926,15 +981,17 @@ function RevenueAdjustmentModal({ onClose, onSaved }: { onClose: () => void; onS
 }
 
 function RevenueAdjustmentHistoryModal({
+  bucket,
   adjustments,
   onClose,
 }: {
+  bucket: AdjustmentBucket;
   adjustments: RevenueAdjustment[];
   onClose: () => void;
 }) {
   const { t } = useLanguage();
   return (
-    <Modal open onClose={onClose} title={t("sales.totalRevenue.history")}>
+    <Modal open onClose={onClose} title={`${t("sales.totalRevenue.history")} — ${bucketTitle(bucket, t)}`}>
       {adjustments.length === 0 ? (
         <EmptyState title={t("sales.totalRevenue.noAdjustments")} />
       ) : (
@@ -960,17 +1017,56 @@ function RevenueAdjustmentHistoryModal({
   );
 }
 
-// ---- Four money buckets (manager + admin): Cash, POS, FIB, Delivery ----
-function ExpectedCashCard({ data }: { data: ExpectedCash }) {
+// Shared Adjust/History header controls — same icons/behavior as TotalRevenueCard.
+function AdjustControls({ onAdjust, onHistory }: { onAdjust: () => void; onHistory: () => void }) {
   const { t } = useLanguage();
   return (
+    <div className="flex items-center gap-1">
+      <button onClick={onHistory} title={t("sales.totalRevenue.history")} className="btn-ghost size-7 rounded-lg">
+        <History size={14} />
+      </button>
+      <button onClick={onAdjust} title={t("sales.totalRevenue.adjust")} className="btn-ghost size-7 rounded-lg">
+        <Plus size={14} />
+      </button>
+    </div>
+  );
+}
+
+// ---- Four money buckets (manager + admin): Cash, POS, FIB, Delivery ----
+function ExpectedCashCard({
+  data,
+  adjustmentTotal,
+  canAdjust,
+  onAdjust,
+  onHistory,
+}: {
+  data: ExpectedCash;
+  adjustmentTotal: number;
+  canAdjust: boolean;
+  onAdjust: () => void;
+  onHistory: () => void;
+}) {
+  const { t } = useLanguage();
+  const adjusted = data.expectedCashOnHand + adjustmentTotal;
+  return (
     <div className="card p-4 border-leaf/40 bg-leaf-50 dark:bg-leaf/10">
-      <div className="flex items-center gap-2 mb-1">
-        <Wallet size={18} className="text-leaf" />
-        <h2 className="font-extrabold">{t("sales.expectedCash.title")}</h2>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="flex items-center gap-2">
+          <Wallet size={18} className="text-leaf" />
+          <h2 className="font-extrabold">{t("sales.expectedCash.title")}</h2>
+        </div>
+        {canAdjust && <AdjustControls onAdjust={onAdjust} onHistory={onHistory} />}
       </div>
-      <p className="text-2xl font-extrabold text-leaf">{iqd(data.expectedCashOnHand)}</p>
-      <p className="text-xs opacity-50 mt-1">{t("sales.expectedCash.hint")}</p>
+      <p className="text-2xl font-extrabold text-leaf">{iqd(adjusted)}</p>
+      {adjustmentTotal !== 0 ? (
+        <p className="text-xs opacity-50 mt-1">
+          {t("sales.totalRevenue.systemTotal", { amount: iqd(data.expectedCashOnHand) })} ·{" "}
+          {adjustmentTotal > 0 ? "+" : ""}
+          {iqd(adjustmentTotal)}
+        </p>
+      ) : (
+        <p className="text-xs opacity-50 mt-1">{t("sales.expectedCash.hint")}</p>
+      )}
     </div>
   );
 }
@@ -978,18 +1074,46 @@ function ExpectedCashCard({ data }: { data: ExpectedCash }) {
 // Running balance card for the POS / FIB / Delivery buckets — same shape as
 // ExpectedCashCard but generic across bucket, since the underlying figure
 // (opening + period accrual − settlements) is identical math for all three.
-function LedgerBalanceCard({ label, data }: { label: string; data: MoneyLedgerBalance }) {
+// Adjust/history controls are optional — Delivery doesn't get them (item ask
+// was specifically Cash/POS/FIB).
+function LedgerBalanceCard({
+  label,
+  data,
+  adjustmentTotal,
+  canAdjust,
+  onAdjust,
+  onHistory,
+}: {
+  label: string;
+  data: MoneyLedgerBalance;
+  adjustmentTotal?: number;
+  canAdjust?: boolean;
+  onAdjust?: () => void;
+  onHistory?: () => void;
+}) {
   const { t } = useLanguage();
+  const adjusted = data.runningBalance + (adjustmentTotal ?? 0);
   return (
     <div className="card p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <Wallet size={18} className="opacity-60" />
-        <h2 className="font-extrabold">{label}</h2>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="flex items-center gap-2">
+          <Wallet size={18} className="opacity-60" />
+          <h2 className="font-extrabold">{label}</h2>
+        </div>
+        {canAdjust && onAdjust && onHistory && <AdjustControls onAdjust={onAdjust} onHistory={onHistory} />}
       </div>
-      <p className="text-2xl font-extrabold">{iqd(data.runningBalance)}</p>
-      <p className="text-xs opacity-50 mt-1">
-        {t("sales.ledger.periodAccrual", { amount: iqd(data.accrual) })}
-      </p>
+      <p className="text-2xl font-extrabold">{iqd(adjusted)}</p>
+      {adjustmentTotal ? (
+        <p className="text-xs opacity-50 mt-1">
+          {t("sales.ledger.periodAccrual", { amount: iqd(data.accrual) })} ·{" "}
+          {adjustmentTotal > 0 ? "+" : ""}
+          {iqd(adjustmentTotal)}
+        </p>
+      ) : (
+        <p className="text-xs opacity-50 mt-1">
+          {t("sales.ledger.periodAccrual", { amount: iqd(data.accrual) })}
+        </p>
+      )}
     </div>
   );
 }

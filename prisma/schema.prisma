@@ -587,13 +587,17 @@ model LoyaltyRedemption {
 }
 
 // ----------------------- Manual revenue adjustment (Sales page, per-branch/day) -----------------------
-// Lets a manager/admin correct the day's DISPLAYED revenue total when the system total
-// and the actual counted total don't match (till short/over) — without touching any
-// underlying Order row. Always signed + reasoned + attributed, same audit-trail
-// principle as every other correction in this file (CashAdjustment, MoneyLedgerEntry).
+// Lets a manager/admin correct one of the Sales page's DISPLAYED boxes when the
+// system total and the actual counted total don't match (till short/over) —
+// without touching any underlying Order/DeliveryOrder row. `bucket` says which
+// box this corrects: "total" (Total revenue), "cash", "pos", or "fib" — each
+// box sums its own bucket's adjustments on top of its computed figure. Always
+// signed + reasoned + attributed, same audit-trail principle as every other
+// correction in this file (CashAdjustment, MoneyLedgerEntry).
 model RevenueAdjustment {
   id          String   @id @default(cuid())
   branch      String // "suli" | "erbil" (city)
+  bucket      String   @default("total") // "total" | "cash" | "pos" | "fib"
   date        DateTime // the business day this adjustment corrects
   amount      Int // IQD, signed (+/-)
   reason      String // required
@@ -601,5 +605,5 @@ model RevenueAdjustment {
   createdBy   User?    @relation(fields: [createdById], references: [id])
   createdAt   DateTime @default(now())
 
-  @@index([branch, date])
+  @@index([branch, bucket, date])
 }
