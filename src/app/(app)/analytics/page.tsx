@@ -370,41 +370,15 @@ export default function AnalyticsPage() {
           onAdjust={() => setAdjustBucket("total")}
           onHistory={() => setHistoryBucket("total")}
         />
-        {cash.data && (
-          <ExpectedCashCard
-            data={cash.data}
-            adjustmentTotal={cashAdjustments.data?.periodTotal ?? 0}
-            canAdjust={canAdjustRevenue}
-            onAdjust={() => setAdjustBucket("cash")}
-            onHistory={() => setHistoryBucket("cash")}
-          />
-        )}
-        {posLedger.data && (
-          <LedgerBalanceCard
-            label={t("sales.pos.title")}
-            data={posLedger.data}
-            adjustmentTotal={posAdjustments.data?.periodTotal ?? 0}
-            canAdjust={canAdjustRevenue}
-            onAdjust={() => setAdjustBucket("pos")}
-            onHistory={() => setHistoryBucket("pos")}
-          />
-        )}
+        {cash.data && <ExpectedCashCard data={cash.data} />}
+        {posLedger.data && <LedgerBalanceCard label={t("sales.pos.title")} data={posLedger.data} />}
         {deliveryLedger.data && (
           <LedgerBalanceCard
             label={allBranches ? t("sales.delivery.title") : deliverySettings?.settings.platformName ?? t("sales.delivery.title")}
             data={deliveryLedger.data}
           />
         )}
-        {fibLedger.data && (
-          <LedgerBalanceCard
-            label={t("sales.fib.title")}
-            data={fibLedger.data}
-            adjustmentTotal={fibAdjustments.data?.periodTotal ?? 0}
-            canAdjust={canAdjustRevenue}
-            onAdjust={() => setAdjustBucket("fib")}
-            onHistory={() => setHistoryBucket("fib")}
-          />
-        )}
+        {fibLedger.data && <LedgerBalanceCard label={t("sales.fib.title")} data={fibLedger.data} />}
       </div>
 
       {/* Summary cards */}
@@ -424,12 +398,35 @@ export default function AnalyticsPage() {
 
       {/* Cash/FIB/POS revenue for the SAME selected range as the rest of the
           page (see /api/analytics's `byPaymentMethod` field) — moves with the
-          date filter above, not fixed to today. */}
+          date filter above, not fixed to today. Editable: each figure is the
+          actual day's sales by payment method, and a till count can be off. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         <Stat label={t("sales.today.orders")} value={num(byPaymentMethod.orders)} />
-        <Stat label={t("sales.today.cash")} value={iqd(byPaymentMethod.cash)} accent />
-        <Stat label={t("sales.today.fib")} value={iqd(byPaymentMethod.fib)} />
-        <Stat label={t("sales.today.pos")} value={iqd(byPaymentMethod.pos)} />
+        <PaymentMethodStat
+          label={t("sales.today.cash")}
+          value={byPaymentMethod.cash}
+          adjustmentTotal={cashAdjustments.data?.periodTotal ?? 0}
+          canAdjust={canAdjustRevenue}
+          onAdjust={() => setAdjustBucket("cash")}
+          onHistory={() => setHistoryBucket("cash")}
+          accent
+        />
+        <PaymentMethodStat
+          label={t("sales.today.fib")}
+          value={byPaymentMethod.fib}
+          adjustmentTotal={fibAdjustments.data?.periodTotal ?? 0}
+          canAdjust={canAdjustRevenue}
+          onAdjust={() => setAdjustBucket("fib")}
+          onHistory={() => setHistoryBucket("fib")}
+        />
+        <PaymentMethodStat
+          label={t("sales.today.pos")}
+          value={byPaymentMethod.pos}
+          adjustmentTotal={posAdjustments.data?.periodTotal ?? 0}
+          canAdjust={canAdjustRevenue}
+          onAdjust={() => setAdjustBucket("pos")}
+          onHistory={() => setHistoryBucket("pos")}
+        />
       </div>
 
       {adjustBucket && (
@@ -855,6 +852,43 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
   );
 }
 
+// Same shape as Stat, plus the Adjust/History controls — used for the day's
+// actual Cash/FIB/POS sales row, since a till count can come in short or over.
+function PaymentMethodStat({
+  label,
+  value,
+  adjustmentTotal,
+  canAdjust,
+  onAdjust,
+  onHistory,
+  accent,
+}: {
+  label: string;
+  value: number;
+  adjustmentTotal: number;
+  canAdjust: boolean;
+  onAdjust: () => void;
+  onHistory: () => void;
+  accent?: boolean;
+}) {
+  const adjusted = value + adjustmentTotal;
+  return (
+    <div className="card p-4">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs opacity-60 font-semibold uppercase tracking-wide">{label}</p>
+        {canAdjust && <AdjustControls onAdjust={onAdjust} onHistory={onHistory} />}
+      </div>
+      <p className={`text-xl font-extrabold mt-1 ${accent ? "text-leaf" : ""}`}>{iqd(adjusted)}</p>
+      {adjustmentTotal !== 0 && (
+        <p className="text-xs opacity-50 mt-0.5">
+          {adjustmentTotal > 0 ? "+" : ""}
+          {iqd(adjustmentTotal)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ---- Total revenue (item 1) + manual adjustment entry point (item 7) ----
 function TotalRevenueCard({
   totalRevenue,
@@ -1033,40 +1067,16 @@ function AdjustControls({ onAdjust, onHistory }: { onAdjust: () => void; onHisto
 }
 
 // ---- Four money buckets (manager + admin): Cash, POS, FIB, Delivery ----
-function ExpectedCashCard({
-  data,
-  adjustmentTotal,
-  canAdjust,
-  onAdjust,
-  onHistory,
-}: {
-  data: ExpectedCash;
-  adjustmentTotal: number;
-  canAdjust: boolean;
-  onAdjust: () => void;
-  onHistory: () => void;
-}) {
+function ExpectedCashCard({ data }: { data: ExpectedCash }) {
   const { t } = useLanguage();
-  const adjusted = data.expectedCashOnHand + adjustmentTotal;
   return (
     <div className="card p-4 border-leaf/40 bg-leaf-50 dark:bg-leaf/10">
-      <div className="flex items-center justify-between gap-2 mb-1">
-        <div className="flex items-center gap-2">
-          <Wallet size={18} className="text-leaf" />
-          <h2 className="font-extrabold">{t("sales.expectedCash.title")}</h2>
-        </div>
-        {canAdjust && <AdjustControls onAdjust={onAdjust} onHistory={onHistory} />}
+      <div className="flex items-center gap-2 mb-1">
+        <Wallet size={18} className="text-leaf" />
+        <h2 className="font-extrabold">{t("sales.expectedCash.title")}</h2>
       </div>
-      <p className="text-2xl font-extrabold text-leaf">{iqd(adjusted)}</p>
-      {adjustmentTotal !== 0 ? (
-        <p className="text-xs opacity-50 mt-1">
-          {t("sales.totalRevenue.systemTotal", { amount: iqd(data.expectedCashOnHand) })} ·{" "}
-          {adjustmentTotal > 0 ? "+" : ""}
-          {iqd(adjustmentTotal)}
-        </p>
-      ) : (
-        <p className="text-xs opacity-50 mt-1">{t("sales.expectedCash.hint")}</p>
-      )}
+      <p className="text-2xl font-extrabold text-leaf">{iqd(data.expectedCashOnHand)}</p>
+      <p className="text-xs opacity-50 mt-1">{t("sales.expectedCash.hint")}</p>
     </div>
   );
 }
@@ -1074,46 +1084,18 @@ function ExpectedCashCard({
 // Running balance card for the POS / FIB / Delivery buckets — same shape as
 // ExpectedCashCard but generic across bucket, since the underlying figure
 // (opening + period accrual − settlements) is identical math for all three.
-// Adjust/history controls are optional — Delivery doesn't get them (item ask
-// was specifically Cash/POS/FIB).
-function LedgerBalanceCard({
-  label,
-  data,
-  adjustmentTotal,
-  canAdjust,
-  onAdjust,
-  onHistory,
-}: {
-  label: string;
-  data: MoneyLedgerBalance;
-  adjustmentTotal?: number;
-  canAdjust?: boolean;
-  onAdjust?: () => void;
-  onHistory?: () => void;
-}) {
+function LedgerBalanceCard({ label, data }: { label: string; data: MoneyLedgerBalance }) {
   const { t } = useLanguage();
-  const adjusted = data.runningBalance + (adjustmentTotal ?? 0);
   return (
     <div className="card p-4">
-      <div className="flex items-center justify-between gap-2 mb-1">
-        <div className="flex items-center gap-2">
-          <Wallet size={18} className="opacity-60" />
-          <h2 className="font-extrabold">{label}</h2>
-        </div>
-        {canAdjust && onAdjust && onHistory && <AdjustControls onAdjust={onAdjust} onHistory={onHistory} />}
+      <div className="flex items-center gap-2 mb-1">
+        <Wallet size={18} className="opacity-60" />
+        <h2 className="font-extrabold">{label}</h2>
       </div>
-      <p className="text-2xl font-extrabold">{iqd(adjusted)}</p>
-      {adjustmentTotal ? (
-        <p className="text-xs opacity-50 mt-1">
-          {t("sales.ledger.periodAccrual", { amount: iqd(data.accrual) })} ·{" "}
-          {adjustmentTotal > 0 ? "+" : ""}
-          {iqd(adjustmentTotal)}
-        </p>
-      ) : (
-        <p className="text-xs opacity-50 mt-1">
-          {t("sales.ledger.periodAccrual", { amount: iqd(data.accrual) })}
-        </p>
-      )}
+      <p className="text-2xl font-extrabold">{iqd(data.runningBalance)}</p>
+      <p className="text-xs opacity-50 mt-1">
+        {t("sales.ledger.periodAccrual", { amount: iqd(data.accrual) })}
+      </p>
     </div>
   );
 }
